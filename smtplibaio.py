@@ -987,8 +987,8 @@ if _have_ssl:
 # Note: This always sends to localhost.
 if __name__ == '__main__':
     print("test need to written for asyncio")
-    return
     import sys
+    sys.exit(0)
 
     def prompt(prompt):
         sys.stdout.write(prompt + ": ")
