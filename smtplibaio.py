@@ -299,6 +299,21 @@ class SMTP:
         finally:
             self.close()
 
+    @asyncio.coroutine
+    def __aenter__(self):
+        return self
+
+    @asyncio.coroutine
+    def __aexit__(self, *args):
+        try:
+            code, message = yield from self.docmd("QUIT")
+            if code != 221:
+                raise SMTPResponseException(code, message)
+        except SMTPServerDisconnected:
+            pass
+        finally:
+            self.close()
+
     def set_debuglevel(self, debuglevel):
         """Set the debug output level.
 
