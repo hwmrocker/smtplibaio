@@ -417,8 +417,10 @@ class SMTP:
             future.set_result(True)
 
         self._loop.add_reader(self.file, callback)
-        yield from future
-        self._loop.remove_reader(self.file)
+        try:
+            yield from future
+        finally:
+            self._loop.remove_reader(self.file)
 
         while 1:
             try:
