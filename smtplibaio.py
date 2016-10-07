@@ -286,33 +286,13 @@ class SMTP:
                     pass
                 self.local_hostname = '[%s]' % addr
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        try:
-            code, message = self.docmd("QUIT")
-            if code != 221:
-                raise SMTPResponseException(code, message)
-        except SMTPServerDisconnected:
-            pass
-        finally:
-            self.close()
-
     @asyncio.coroutine
     def __aenter__(self):
         return self
 
     @asyncio.coroutine
     def __aexit__(self, *args):
-        try:
-            code, message = yield from self.docmd("QUIT")
-            if code != 221:
-                raise SMTPResponseException(code, message)
-        except SMTPServerDisconnected:
-            pass
-        finally:
-            self.close()
+        yield from self.quit()
 
     def set_debuglevel(self, debuglevel):
         """Set the debug output level.
@@ -945,13 +925,21 @@ class SMTP:
     @asyncio.coroutine
     def quit(self):
         """Terminate the SMTP session."""
-        res = yield from self.docmd("quit")
-        # A new EHLO is required after reconnecting with connect()
-        self.ehlo_resp = self.helo_resp = None
-        self.esmtp_features = {}
-        self.does_esmtp = False
-        self.close()
-        return res
+        try:
+            code, message = yield from self.docmd("quit")
+
+            if code != 221:
+                raise SMTPResponseException(code, message)
+        except SMTPServerDisconnected:
+            pass
+        finally:
+            # A new EHLO is required after reconnecting with connect()
+            self.ehlo_resp = self.helo_resp = None
+            self.esmtp_features = {}
+            self.does_esmtp = False
+            self.close()
+
+        return (code, message)
 
 if _have_ssl:
 
