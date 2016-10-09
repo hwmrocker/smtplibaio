@@ -13,16 +13,15 @@ and MAIL commands!
 
 Example:
 
-@asyncio.coroutine
-def send(from_email, to_email, msg)
+async def send(from_email, to_email, msg)
     server = SMTP_SSL()
-    code, msg = yield from server.connect(mail_server)
+    code, _ = await server.connect(mail_server)
     assert code == 220, "connect failed"
     try:
-        yield from server.login(mailbox_name, mailbox_password)
-        yield from server.sendmail(from_email, to_email, msg.as_string())
+        await server.login(mailbox_name, mailbox_password)
+        await server.sendmail(from_email, to_email, msg.as_string())
     finally:
-        yield from server.quit()
+        await server.quit()
 '''
 
 # Author: The Dragon De Monsyne <dragondm@integral.org>
