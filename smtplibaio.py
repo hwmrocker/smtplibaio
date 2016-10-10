@@ -231,7 +231,7 @@ class SMTP:
         method called 'sendmail' that will do an entire mail transaction.
         """
     debug_level = 0
-    
+
     # file = None
     # helo_resp = None
     # ehlo_msg = "ehlo"
@@ -242,7 +242,8 @@ class SMTP:
     def __init__(self, host='localhost', port=_default_port,
                  local_hostname=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
                  source_address=None, loop=None):
-        """Initialize a new instance.
+        """
+        Initializes a new instance.
 
         If specified, `host' is the name of the remote host to which to
         connect.  If specified, `port' specifies the port to which to connect.
@@ -253,18 +254,13 @@ class SMTP:
         command.  Otherwise, the local hostname is found using
         socket.getfqdn(). The `source_address` parameter takes a 2-tuple (host,
         port) for the socket to bind to as its source address before
-        connecting. If the host is '' and port is 0, the OS default behavior
-        will be used.
-
+        connecting.
         """
         self.file = None
         self.helo_resp = None
         self.ehlo_msg = "ehlo"
         self.ehlo_resp = None
         self.does_esmtp = False
-
-        self.host = host
-        self.port = port
 
         self.timeout = timeout
         self.sock = None
@@ -275,43 +271,8 @@ class SMTP:
 
         self._loop = loop if loop else asyncio.get_event_loop()
 
-        # Try to set port:
-        # If `port` is the default one, check if it is specified in `host`:
-        port_is_default = port is self.__class__._default_port
-        host_contains_port = self.host.find(':') == self.host.rfind(':')
-
-        if port_is_default and host_contains_port:
-            i = self.host.rfind(':')
-
-            if i >= 0:
-                self.host, self.port = self.host[:i], self.host[i+1:]
-
-                try:
-                    self.port = int(self.port)
-                except ValueError:
-                    raise OSError("non-numeric port given.")
-
-        # Try to set local_hostname:
-        if local_hostname is not None:
-            self.local_hostname = local_hostname
-        else:
-            # RFC 2821 says we should use the fqdn in the EHLO/HELO verb, and
-            # if that can't be calculated, that we should use a domain literal
-            # instead (essentially an encoded IP address like [A.B.C.D]).
-            fqdn = socket.getfqdn()
-
-            if '.' in fqdn:
-                self.local_hostname = fqdn
-            else:
-                # We can't find an fqdn hostname, so use a domain literal
-                addr = '127.0.0.1'
-
-                try:
-                    addr = socket.gethostbyname(socket.gethostname())
-                except socket.gaierror:
-                    pass
-
-                self.local_hostname = "[{0}]".format(addr)
+        self._set_host_and_port(host, port) \
+            ._set_local_hostname(local_hostname)
 
     @asyncio.coroutine
     def __aenter__(self):
@@ -325,13 +286,79 @@ class SMTP:
 
     @classmethod
     def set_debuglevel(cls, debuglevel):
-        """Set the debug output level.
+        """
+        Sets the debug output level.
 
         A non-false value results in debug messages for connection and for all
         messages sent to and received from the server.
-
         """
         cls.debug_level = debuglevel
+
+    def _set_host_and_port(self, host, port):
+        """
+        Sets host and port from the given `host` and `port`.
+
+        If the host ends with a colon (":") followed by a number,
+        and if port is the default one, that suffix will be stripped off and
+        the number interpreted as the port number to use.
+        """
+        self.host = host
+        self.port = port
+
+        port_is_default = port is self.__class__._default_port
+        host_contains_port = host.find(":") == host.rfind(":")
+
+        if port_is_default and host_contains_port:
+            i = host.rfind(":")
+
+            if i >= 0:
+                self.host, port = host[:i], host[i+1:]
+
+                try:
+                    self.port = int(port)
+                except ValueError:
+                    err = "Non-numeric port given: {0}".format(port)
+                    raise OSError(err)
+
+        if self.__class__.debug_level > 0:
+            print("Host: {0}, Port: {1}"
+                  .format(self.host, self.port),
+                  file=stderr)
+
+        return self
+
+    def _set_local_hostname(self, local_hostname):
+        """
+        Sets (or try to retrieve) local hostname.
+
+        RFC 2821 says we should use the FQDN in the EHLO/HELO verb, and if
+        it can't be calculated, that we should use a domain literal instead
+        (essentially an encoded IP address like A.B.C.D).
+        """
+        if local_hostname is not None:
+            self.local_hostname = local_hostname
+        else:
+            fqdn = socket.getfqdn()
+
+            if '.' in fqdn:
+                self.local_hostname = fqdn
+            else:
+                # We can't find any hostname, so use a domain literal:
+                addr = "127.0.0.1"
+
+                try:
+                    addr = socket.gethostbyname(socket.gethostname())
+                except socket.gaierror:
+                    pass
+
+                self.local_hostname = "[{0}]".format(addr)
+
+        if self.__class__.debug_level > 0:
+            print("Local Hostname: {0}"
+                  .format(self.local_hostname),
+                  file=stderr)
+
+        return self
 
     def _get_socket(self):
         """
@@ -1020,7 +1047,7 @@ class SMTP:
     def quit(self):
         """
         Terminates the SMTP session.
-        
+
         Raises SMTPServerDisconnected if the connection is already closed.
         Raises SMTPResponseException if something wrong happens.
         """
