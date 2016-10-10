@@ -230,7 +230,8 @@ class SMTP:
         method of the same name to perform each SMTP command.  There is also a
         method called 'sendmail' that will do an entire mail transaction.
         """
-    debuglevel = 0
+    debug_level = 0
+    
     file = None
     helo_resp = None
     ehlo_msg = "ehlo"
@@ -293,19 +294,20 @@ class SMTP:
     def __aexit__(self, *args):
         yield from self.quit()
 
-    def set_debuglevel(self, debuglevel):
+    @classmethod
+    def set_debuglevel(cls, debuglevel):
         """Set the debug output level.
 
         A non-false value results in debug messages for connection and for all
         messages sent to and received from the server.
 
         """
-        self.debuglevel = debuglevel
+        cls.debug_level = debuglevel
 
     def _get_socket(self, host, port, timeout):
         # This makes it simpler for SMTP_SSL to use the SMTP connect code
         # and just alter the socket connection bit.
-        if self.debuglevel > 0:
+        if self.__class__.debug_level > 0:
             print('connect: to', (host, port), self.source_address, file=stderr)
         sock = socket.create_connection((host, port), timeout, self.source_address)
         return sock
@@ -338,19 +340,19 @@ class SMTP:
                     raise OSError("nonnumeric port")
         if not port:
             port = self.default_port
-        if self.debuglevel > 0:
+        if self.__class__.debug_level > 0:
             print('connect:', (host, port), file=stderr)
         self.sock = self._get_socket(host, port, self.timeout)
         self.file = None
         (code, msg) = yield from self.getreply()
-        if self.debuglevel > 0:
+        if self.__class_.debug_level > 0:
             print("connect:", msg, file=stderr)
         return (code, msg)
 
     @asyncio.coroutine
     def send(self, s):
         """Send `s' to the server."""
-        if self.debuglevel > 0:
+        if self.__class__.debug_level > 0:
             print('send:', repr(s), file=stderr)
         if hasattr(self, 'sock') and self.sock:
             if isinstance(s, str):
@@ -412,7 +414,7 @@ class SMTP:
             if not line:
                 self.close()
                 raise SMTPServerDisconnected("Connection unexpectedly closed")
-            if self.debuglevel > 0:
+            if self.__class__.debug_level > 0:
                 print('reply:', repr(line), file=stderr)
             if len(line) > _MAXLINE:
                 self.close()
@@ -431,7 +433,7 @@ class SMTP:
                 break
 
         errmsg = b"\n".join(resp)
-        if self.debuglevel > 0:
+        if self.__class__.debug_level > 0:
             print('reply: retcode (%s); Msg: %s' % (errcode, errmsg), file=stderr)
         return errcode, errmsg
 
@@ -570,7 +572,7 @@ class SMTP:
         """
         yield from self.putcmd("data")
         (code, repl) = yield from self.getreply()
-        if self.debuglevel > 0:
+        if self.__class__.debug_level > 0:
             print("data:", (code, repl), file=stderr)
         if code != 354:
             raise SMTPDataError(code, repl)
@@ -583,7 +585,7 @@ class SMTP:
             q = q + b"." + bCRLF
             yield from self.send(q)
             (code, msg) = yield from self.getreply()
-            if self.debuglevel > 0:
+            if self.__class__.debug_level > 0:
                 print("data:", (code, msg), file=stderr)
             return (code, msg)
 
@@ -978,7 +980,7 @@ if _have_ssl:
                     source_address)
 
         def _get_socket(self, host, port, timeout):
-            if self.debuglevel > 0:
+            if self.__class__.debug_level > 0:
                 print('connect:', (host, port), file=stderr)
             new_socket = socket.create_connection((host, port), timeout, self.source_address)
             new_socket = self.context.wrap_socket(new_socket, server_hostname=host)
