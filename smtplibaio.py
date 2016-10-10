@@ -182,8 +182,11 @@ def quotedata(data):
     Double leading '.', and change Unix newline '\\n', or Mac '\\r' into
     Internet CRLF end-of-line.
     """
-    return re.sub(r'(?m)^\.', '..',
-        re.sub(r'(?:\r\n|\n|\r(?!\n))', CRLF, data))
+    return re.sub(r'(?m)^\.',
+                  '..',
+                  re.sub(r'(?:\r\n|\n|\r(?!\n))',
+                         CRLF,
+                         data))
 
 
 def _quote_periods(bindata):
@@ -371,8 +374,8 @@ class SMTP:
                   file=stderr)
 
         self.sock = socket.create_connection((self.host, self.port),
-                                              self.timeout,
-                                              self.source_address)
+                                             self.timeout,
+                                             self.source_address)
 
     @asyncio.coroutine
     def connect(self):
@@ -783,21 +786,26 @@ class SMTP:
         # all methods.
         for authmethod in authlist:
             if authmethod == AUTH_CRAM_MD5:
-                (code, resp) = yield from self.docmd("AUTH", AUTH_CRAM_MD5)
+                code, resp = yield from self.docmd("AUTH", AUTH_CRAM_MD5)
 
                 if code == 334:
-                    (code, resp) = yield from self.docmd(encode_cram_md5(resp, user, password))
+                    cmd = encode_cram_md5(resp, user, password)
+                    code, resp = yield from self.docmd(cmd)
 
             elif authmethod == AUTH_PLAIN:
-                (code, resp) = yield from self.docmd("AUTH",
-                    AUTH_PLAIN + " " + encode_plain(user, password))
+                cmd = "{0} {1}".format(AUTH_PLAIN,
+                                       encode_plain(user, password))
+                code, resp = yield from self.docmd("AUTH", cmd)
 
             elif authmethod == AUTH_LOGIN:
-                (code, resp) = yield from self.docmd("AUTH",
-                    "%s %s" % (AUTH_LOGIN, encode_base64(user.encode('ascii'), eol='')))
+                cmd = "{0} {1}".format(AUTH_LOGIN,
+                                       encode_base64(user.encode('ascii'),
+                                                     eol=''))
+                code, resp = yield from self.docmd("AUTH", cmd)
 
                 if code == 334:
-                    (code, resp) = yield from self.docmd(encode_base64(password.encode('ascii'), eol=''))
+                    cmd = encode_base64(password.encode('ascii'), eol='')
+                    code, resp = yield from self.docmd(cmd)
 
             # 235 == 'Authentication successful'
             # 503 == 'Error: already authenticated'
@@ -978,7 +986,7 @@ class SMTP:
 
     @asyncio.coroutine
     def send_message(self, msg, from_addr=None, to_addrs=None,
-                mail_options=[], rcpt_options={}):
+                     mail_options=[], rcpt_options={}):
         """Converts message to a bytestring and passes it to sendmail.
 
         The arguments are as for sendmail, except that msg is an
@@ -1009,11 +1017,13 @@ class SMTP:
             header_prefix = 'Resent-'
         else:
             raise ValueError("message has more than one 'Resent-' header block")
+
         if from_addr is None:
             # Prefer the sender field per RFC 2822:3.6.2.
             from_addr = (msg[header_prefix + 'Sender']
-                           if (header_prefix + 'Sender') in msg
-                           else msg[header_prefix + 'From'])
+                         if (header_prefix + 'Sender') in msg
+                         else msg[header_prefix + 'From'])
+
         if to_addrs is None:
             addr_fields = [f for f in (msg[header_prefix + 'To'],
                                        msg[header_prefix + 'Bcc'],
@@ -1023,12 +1033,14 @@ class SMTP:
         msg_copy = copy.copy(msg)
         del msg_copy['Bcc']
         del msg_copy['Resent-Bcc']
+
         with io.BytesIO() as bytesmsg:
             g = email.generator.BytesGenerator(bytesmsg)
             g.flatten(msg_copy, linesep='\r\n')
             flatmsg = bytesmsg.getvalue()
-        return (yield from self.sendmail(from_addr, to_addrs, flatmsg, mail_options,
-                             rcpt_options))
+
+        return (yield from self.sendmail(from_addr, to_addrs, flatmsg,
+                                         mail_options, rcpt_options))
 
     def close(self):
         """Close the connection to the SMTP server."""
@@ -1091,26 +1103,45 @@ if _have_ssl:
                      keyfile=None, certfile=None,
                      timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
                      source_address=None, context=None):
+            """
+            Initializes a new SMTP_SSL instance.
+
+            Raises ValueError in the following cases:
+
+            * Both `context` and `keyfile` have been given ;
+            * Both `context` and `certfile` have been given.
+            """
             if context is not None and keyfile is not None:
                 raise ValueError("context and keyfile arguments are mutually "
                                  "exclusive")
+
             if context is not None and certfile is not None:
                 raise ValueError("context and certfile arguments are mutually "
                                  "exclusive")
+
             self.keyfile = keyfile
             self.certfile = certfile
+
             if context is None:
                 context = ssl._create_stdlib_context(certfile=certfile,
                                                      keyfile=keyfile)
+
             self.context = context
-            SMTP.__init__(self, host, port, local_hostname, timeout,
-                    source_address)
+
+            super().__init__(self, host, port, local_hostname, timeout,
+                             source_address)
 
         def _get_socket(self, host, port, timeout):
+            """
+            """
             if self.__class__.debug_level > 0:
                 print('connect:', (host, port), file=stderr)
-            new_socket = socket.create_connection((host, port), timeout, self.source_address)
+
+            new_socket = socket.create_connection((host, port),
+                                                  timeout,
+                                                  self.source_address)
             new_socket = self.context.wrap_socket(new_socket, server_hostname=host)
+
             return new_socket
 
     __all__.append("SMTP_SSL")
