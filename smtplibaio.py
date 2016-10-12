@@ -563,40 +563,47 @@ class SMTP:
 
         return code, message
 
-    async def data(self, msg):
-        """SMTP 'DATA' command -- sends message data to server.
-
-        Automatically quotes lines beginning with a period per rfc821.
-        Raises SMTPDataError if there is an unexpected reply to the
-        DATA command; the return value from this method is the final
-        response code received when the all data is sent.  If msg
-        is a string, lone '\\r' and '\\n' characters are converted to
-        '\\r\\n' characters.  If msg is bytes, it is transmitted as is.
+    async def data(self, data):
         """
-        await self.put_cmd("data")
-        code, repl = await self.get_reply()
+        Send a SMTP 'DATA' command. - Sends message data to the server.
+
+        Automatically quotes lines beginning with a period (RFC 821).
+
+        If `data` is a str object, converts lone '\\r' and '\\n' to '\\r\\n'.
+        If `data` is a bytes object, sends it as is.
+
+        Raises SMTPDataRefusedError when the server replies with something
+        unexpected.
+
+        Returns a (code, message) tuple containing the last server response
+        (the one it sent after all data were sent by the client).
+        """
+        code, message = await self.do_cmd('DATA')
 
         if self.__class__.debug_level > 0:
-            print("data:", (code, repl), file=stderr)
+            print("DATA: {0}".format(code, message), file=stderr)
 
         if code != 354:
-            raise SMTPDataRefusedError(code, repl)
-        else:
-            if isinstance(msg, str):
-                msg = _fix_eols(msg).encode('ascii')
-            q = _quote_periods(msg)
+            raise SMTPDataRefusedError(code, message)
 
-            if q[-2:] != bCRLF:
-                q = q + bCRLF
-            q = q + b"." + bCRLF
+        # FIXME: following line should probably go into a static method:
+        if isinstance(data, str):
+            data = _fix_eols(data).encode('ascii')
 
-            await self.send(q)
-            code, msg = await self.get_reply()
+        q = _quote_periods(data)
 
-            if self.__class__.debug_level > 0:
-                print("data:", (code, msg), file=stderr)
+        if q[-2:] != bCRLF:
+            q = q + bCRLF
 
-            return (code, msg)
+        q = q + b"." + bCRLF
+
+        await self.send(q)
+        code, message = await self.get_reply()
+
+        if self.__class__.debug_level > 0:
+            print("DATA: {0}".format(code, message), file=stderr)
+
+        return code, message
 
     async def ehlo_or_helo_if_needed(self):
         """Call self.ehlo() and/or self.helo() if needed.
@@ -999,65 +1006,65 @@ class SMTP:
 
         return extns, auths
 
-if _have_ssl:
 
-    class SMTP_SSL(SMTP):
-        """ This is a subclass derived from SMTP that connects over an SSL
-        encrypted socket (to use this class you need a socket module that was
-        compiled with SSL support). If host is not specified, '' (the local
-        host) is used. If port is omitted, the standard SMTP-over-SSL port
-        (465) is used.  local_hostname and source_address have the same meaning
-        as they do in the SMTP class.  keyfile and certfile are also optional -
-        they can contain a PEM formatted private key and certificate chain file
-        for the SSL connection. context also optional, can contain a
-        SSLContext, and is an alternative to keyfile and certfile; If it is
-        specified both keyfile and certfile must be None.
+ class SMTP_SSL(SMTP):
+    """
+    This is a subclass derived from SMTP that connects over an SSL
+    encrypted socket (to use this class you need a socket module that was
+    compiled with SSL support). If host is not specified, '' (the local
+    host) is used. If port is omitted, the standard SMTP-over-SSL port
+    (465) is used.  local_hostname and source_address have the same meaning
+    as they do in the SMTP class.  keyfile and certfile are also optional -
+    they can contain a PEM formatted private key and certificate chain file
+    for the SSL connection. context also optional, can contain a
+    SSLContext, and is an alternative to keyfile and certfile; If it is
+    specified both keyfile and certfile must be None.
+    """
+    _default_port = SMTP_SSL_PORT
 
+    def __init__(self, host='localhost', port=_default_port, fqdn=None,
+                 context=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
         """
+        Initializes a new SMTP_SSL instance.
+        """
+        if context is None:
+            context = ssl.create_default_context(purpose=Purpose.SERVER_AUTH)
 
-        default_port = SMTP_SSL_PORT
+        self.context = context
 
-        def __init__(self, host='', port=0, local_hostname=None,
-                     keyfile=None, certfile=None,
-                     timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
-                     source_address=None, context=None):
-            """
-            Initializes a new SMTP_SSL instance.
+        super().__init__(self, host, port, fqdn, timeout)
 
-            Raises ValueError in the following cases:
+     async def connect(self):
+        """
+        Connects to the server.
 
-            * Both `context` and `keyfile` have been given ;
-            * Both `context` and `certfile` have been given.
-            """
-            if context is not None and keyfile is not None:
-                raise ValueError("context and keyfile arguments are mutually "
-                                 "exclusive")
+        We use `asyncio Streams`_.
 
-            if context is not None and certfile is not None:
-                raise ValueError("context and certfile arguments are mutually "
-                                 "exclusive")
+        Note: This method is automatically invoked by `__aenter__`.
 
-            self.keyfile = keyfile
-            self.certfile = certfile
+        .. _`asyncio Streams`: https://docs.python.org/3/library/asyncio-stream.html
+        """
+        if self.__class__.debug_level > 0:
+            print("Connect: {0}"
+                  .format((self.hostname, self.port)),
+                  file=stderr)
 
-            if context is None:
-                context = ssl._create_stdlib_context(certfile=certfile,
-                                                     keyfile=keyfile)
+        connect = asyncio.open_connection(host=self.hostname,
+                                          port=self.port,
+                                          ssl=self.context,
+                                          loop=self.loop)
 
-            self.context = context
+        try:
+            self.reader, self.writer = await connect
+        except socket.gaierror as e:
+            raise SMTPConnectError(e.errno, e.strerror)
 
-            super().__init__(self, host, port, local_hostname, timeout,
-                             source_address)
+        code, msg = await self.get_reply()
 
-        def _get_socket(self, host, port, timeout):
-            """
-            """
-            if self.__class__.debug_level > 0:
-                print('connect:', (host, port), file=stderr)
+        if self.__class__.debug_level > 0:
+            print("Connect: {0} {1}"
+                  .format(code, msg),
+                  file=stderr)
 
-            new_socket = socket.create_connection((host, port),
-                                                  timeout,
-                                                  self.source_address)
-            new_socket = self.context.wrap_socket(new_socket, server_hostname=host)
-
-            return new_socket
+        if code != 220:
+            raise SMTPConnectError(code, msg)
