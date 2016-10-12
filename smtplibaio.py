@@ -1,4 +1,5 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python
+# coding: utf-8
 
 '''SMTP/ESMTP client class.
 
@@ -46,100 +47,36 @@ import email.generator
 import base64
 import hmac
 import copy
+
 from email.base64mime import body_encode as encode_base64
 from sys import stderr
+
 import threading
 
-__all__ = ["SMTPException", "SMTPServerDisconnected", "SMTPResponseException",
-           "SMTPSenderRefused", "SMTPRecipientsRefused", "SMTPDataError",
-           "SMTPConnectError", "SMTPHeloError", "SMTPAuthenticationError",
-           "quoteaddr", "quotedata", "SMTP"]
+from smtplibaio.exceptions import (
+    SMTPException,
+    SMTPResponseException,
+    SMTPConnectError,
+    SMTPServerDisconnectedError,
+    SMTPCommandNotSupportedError,
+    SMTPSenderRefusedError,
+    SMTPRecipientRefusedError,
+    SMTPAllRecipientsRefusedError,
+    SMTPDataRefusedError,
+    SMTPHeloRefusedError,
+    SMTPAuthenticationError
+)
+
 
 SMTP_PORT = 25
 SMTP_SSL_PORT = 465
+
 CRLF = "\r\n"
 bCRLF = b"\r\n"
+
 _MAXLINE = 8192  # more than 8 times larger than RFC 821, 4.5.3
 
 OLDSTYLE_AUTH = re.compile(r"auth=(.*)", re.I)
-
-
-
-# Exception classes used by this module.
-
-class SMTPException(OSError):
-    """Base class for all exceptions raised by this module."""
-
-
-class SMTPServerDisconnected(SMTPException):
-    """Not connected to any SMTP server.
-
-    This exception is raised when the server unexpectedly disconnects,
-    or when an attempt is made to use the SMTP instance before
-    connecting it to a server.
-    """
-
-
-class SMTPResponseException(SMTPException):
-    """Base class for all exceptions that include an SMTP error code.
-
-    These exceptions are generated in some instances when the SMTP
-    server returns an error code.  The error code is stored in the
-    `smtp_code' attribute of the error, and the `smtp_error' attribute
-    is set to the error message.
-    """
-
-    def __init__(self, code, msg):
-        self.smtp_code = code
-        self.smtp_error = msg
-        self.args = (code, msg)
-
-
-class SMTPSenderRefused(SMTPResponseException):
-    """Sender address refused.
-
-    In addition to the attributes set by on all SMTPResponseException
-    exceptions, this sets `sender' to the string that the SMTP refused.
-    """
-
-    def __init__(self, code, msg, sender):
-        self.smtp_code = code
-        self.smtp_error = msg
-        self.sender = sender
-        self.args = (code, msg, sender)
-
-
-class SMTPRecipientsRefused(SMTPException):
-    """All recipient addresses refused.
-
-    The errors for each recipient are accessible through the attribute
-    'recipients', which is a dictionary of exactly the same sort as
-    SMTP.sendmail() returns.
-    """
-
-    def __init__(self, recipients):
-        self.recipients = recipients
-        self.args = (recipients,)
-
-
-class SMTPDataError(SMTPResponseException):
-    """The SMTP server didn't accept the data."""
-
-
-class SMTPConnectError(SMTPResponseException):
-    """Error during connection establishment."""
-
-
-class SMTPHeloError(SMTPResponseException):
-    """The server refused our HELO reply."""
-
-
-class SMTPAuthenticationError(SMTPResponseException):
-    """Authentication error.
-
-    Most probably the server didn't accept the username/password
-    combination provided.
-    """
 
 
 def quoteaddr(addrstring):
@@ -194,7 +131,9 @@ else:
 
 
 class SMTP:
-    """This class manages a connection to an SMTP or ESMTP server.
+    # FIXME: rewrite docstring
+    """
+    This class manages a connection to an SMTP or ESMTP server.
     SMTP Objects:
         SMTP objects have the following attributes:
             helo_resp
@@ -222,146 +161,87 @@ class SMTP:
         method of the same name to perform each SMTP command.  There is also a
         method called 'sendmail' that will do an entire mail transaction.
         """
-    # Class attributes:
     _default_port = SMTP_PORT
     debug_level = 0
 
-    def __init__(self, host='localhost', port=_default_port,
-                 local_hostname=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
-                 source_address=None, loop=None):
+    def __init__(self, hostname='localhost', port=_default_port,
+                 timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None,
+                 loop=None):
         """
         Initializes a new instance.
 
+        FIXME: rewrite docstring
+
         If specified, `host' is the name of the remote host to which to
         connect.  If specified, `port' specifies the port to which to connect.
-        By default, smtplib.SMTP_PORT is used.  If a host is specified the
-        connect method is called, and if it returns anything other than a
-        success code an SMTPConnectError is raised.  If specified,
-        `local_hostname` is used as the FQDN of the local host in the HELO/EHLO
-        command.  Otherwise, the local hostname is found using
-        socket.getfqdn(). The `source_address` parameter takes a 2-tuple (host,
+        By default, smtplibaio.SMTP_PORT is used.
+
+        If a host is specified the connect method is called, and if it returns
+        anything other than a success code an SMTPConnectError is raised.
+ 
+        The `source_address` parameter takes a 2-tuple (host,
         port) for the socket to bind to as its source address before
         connecting.
         """
-        self.helo_resp = None
-        self.ehlo_msg = "ehlo"
-        self.ehlo_resp = None
-        self.does_esmtp = False
-
+        self.hostname = hostname
+        self.port = port
         self.timeout = timeout
-        self.is_connected = False
 
-        self.esmtp_features = {}
         self.source_address = source_address
 
-        self._loop = loop if loop else asyncio.get_event_loop()
+        self.last_helo_response = (None, None)
+        self.last_ehlo_response = (None, None)
+        
+        self.supports_esmtp = False
+        self.esmtp_extensions = {}
 
-        self._reader = None
-        self._writer = None
+        self.reader = None
+        self.writer = None
 
-        self._set_host_and_port(host, port) \
-            ._set_local_hostname(local_hostname)
+        self.loop = loop or asyncio.get_event_loop()
 
-    @asyncio.coroutine
-    def __aenter__(self):
+        # self.helo_resp = None
+        # self.ehlo_msg = "ehlo"
+        # self.ehlo_resp = None
+        # self.does_esmtp = False
+
+        # self.esmtp_features = {}
+        # self.source_address = source_address
+
+        # self._loop = loop if loop else asyncio.get_event_loop()
+
+        # self._reader = None
+        # self._writer = None
+
+        # self._set_host_and_port(host, port) \
+        #     ._set_local_hostname(local_hostname)
+
+    @classmethod
+    def set_debuglevel(cls, debuglevel):
+        """
+        Set the debug output level.
+        """
+        cls.debug_level = debuglevel
+
+    async def __aenter__(self):
         """
         Enters the asynchronous context manager.
 
         Also tries to connect to the server.
         """
-        # task = self._loop.create_task(self.connect())
-        # yield from task
-        yield from self.connect()
+        await self.connect()
 
         return self
 
-    @asyncio.coroutine
-    def __aexit__(self, *args):
+    async def __aexit__(self, *args):
         """
         Exits the asynchronous context manager.
 
         See :py:func:`quit` for further details.
         """
-        yield from self.quit()
+        await self.quit()
 
-    @classmethod
-    def set_debuglevel(cls, debuglevel):
-        """
-        Sets the debug output level.
-
-        A non-false value results in debug messages for connection and for
-        all messages sent to and received from the server.
-        """
-        cls.debug_level = debuglevel
-
-    def _set_host_and_port(self, host, port):
-        """
-        Sets host and port from the given `host` and `port`.
-
-        If given host ends with a colon (":") followed by a number,
-        and if given port is the default one, that suffix will be stripped
-        off and the number interpreted as the port number to use.
-        """
-        self.host = host
-        self.port = port
-
-        port_is_default = port is self.__class__._default_port
-        host_contains_port = host.find(":") == host.rfind(":")
-
-        if port_is_default and host_contains_port:
-            i = host.rfind(":")
-
-            if i >= 0:
-                self.host, port = host[:i], host[i+1:]
-
-                try:
-                    self.port = int(port)
-                except ValueError:
-                    err = "Non-numeric port given: {0}".format(port)
-                    raise OSError(err)
-
-        if self.__class__.debug_level > 0:
-            print("Host: {0}, Port: {1}"
-                  .format(self.host, self.port),
-                  file=stderr)
-
-        return self
-
-    def _set_local_hostname(self, local_hostname):
-        """
-        Sets (or tries to retrieve) local hostname.
-
-        RFC 2821 says we should use the FQDN in the EHLO/HELO verb, and if
-        it can't be calculated, that we should use a domain literal instead
-        (essentially an encoded IP address like A.B.C.D).
-        """
-        if local_hostname is not None:
-            self.local_hostname = local_hostname
-        else:
-            fqdn = socket.getfqdn()
-
-            if '.' in fqdn:
-                self.local_hostname = fqdn
-            else:
-                # We can't find any hostname, so use a domain literal:
-                addr = "127.0.0.1"
-
-                try:
-                    addr = socket.gethostbyname(socket.gethostname())
-                except socket.gaierror:
-                    pass
-
-                self.local_hostname = "[{0}]".format(addr)
-
-        if self.__class__.debug_level > 0:
-            print("Local Hostname: {0}"
-                  .format(self.local_hostname),
-                  file=stderr)
-
-        return self
-
-    @asyncio.coroutine
-    def connect(self):
+    async def connect(self):
         """
         Connects to the server.
 
@@ -376,31 +256,28 @@ class SMTP:
                   .format((self.host, self.port)),
                   file=stderr)
 
-        connect = asyncio.open_connection(self.host,
+        connect = asyncio.open_connection(self.hostname,
                                           self.port,
                                           ssl=False,
                                           local_addr=self.source_address,
-                                          loop=self._loop)
+                                          loop=self.loop)
 
         try:
-            self._reader, self._writer = yield from connect
+            self.reader, self.writer = await connect
         except socket.gaierror as e:
             raise SMTPConnectError(e.errno, e.strerror)
 
-        code, msg = yield from self.get_reply()
+        code, msg = await self.get_reply()
 
         if self.__class__.debug_level > 0:
             print("Connect: {0} {1}"
                   .format(code, msg),
                   file=stderr)
 
-        self.is_connected = (code == 220)
-
-        if not self.is_connected:
+        if code != 220:
             raise SMTPConnectError(code, msg)
 
-    @asyncio.coroutine
-    def send(self, s):
+    async def send(self, s):
         """
         Sends the given string to the server.
         """
@@ -409,19 +286,19 @@ class SMTP:
 
         # Check if we have a writer
         # (should be the case if we are connected):
-        if self._writer is None:
-            raise SMTPServerDisconnected("Please run connect() first.")
+        if self.writer is None:
+            self.close()
+            raise SMTPServerDisconnectedError()
         else:
             if isinstance(s, str):
                 s = s.encode("ascii")
 
             # Don't try/except here since this will "mask" the
             # GeneratorExit Exception that has to be raised.
-            self._writer.write(s)
-            yield from self._writer.drain()
+            self.writer.write(s)
+            await self._writer.drain()
 
-    @asyncio.coroutine
-    def put_cmd(self, cmd, args=None):
+    async def put_cmd(self, cmd, args=None):
         """
         Sends a command to the server.
         """
@@ -431,14 +308,12 @@ class SMTP:
             str = '%s %s%s' % (cmd, args, CRLF)
 
         try:
-            yield from self.send(str)
+            await self.send(str)
         except OSError as e:
             self.close()
-            err = "Connection unexpectedly closed: {0}".format(e)
-            raise SMTPServerDisconnected(err)
+            raise SMTPServerDisconnectedError(e)
 
-    @asyncio.coroutine
-    def get_reply(self):
+    async def get_reply(self):
         """
         Gets a reply from the server.
 
@@ -459,18 +334,18 @@ class SMTP:
 
         while go_on:
             try:
-                line = yield from self._reader.readline()
+                line = await self.reader.readline()
             except OSError as e:
                 self.close()
-                err = "Connection unexpectedly closed: {0}".format(e)
-                raise SMTPServerDisconnected(err)
-
+                raise SMTPServerDisconnectedError(e)
+                
             if not line:
                 self.close()
-                raise SMTPServerDisconnected("Connection unexpectedly closed.")
+                raise SMTPServerDisconnectedError()
 
             if len(line) > _MAXLINE:
                 self.close()
+                # FIXME: we should not instanciate SMTPResponseException directly.
                 raise SMTPResponseException(500, "Line too long.")
 
             msg = line[4:].strip(b' \t\r\n')
@@ -498,53 +373,45 @@ class SMTP:
 
         return errcode, errmsg
 
-    @asyncio.coroutine
-    def do_cmd(self, cmd, args=""):
+    async def do_cmd(self, cmd, args=""):
         """
         Sends the given command to the server.
 
         Returns a tuple containing the response code and message.
         """
-        yield from self.put_cmd(cmd, args)
+        await self.put_cmd(cmd, args)
 
-        return (yield from self.get_reply())
+        return await self.get_reply()
 
-    # std smtp commands
-    @asyncio.coroutine
-    def helo(self, name=''):
+    async def helo(self, name=''):
         """SMTP 'helo' command.
         Hostname to send for this command defaults to the FQDN of the local
         host.
         """
-        yield from self.put_cmd("helo", name or self.local_hostname)
-        code, msg = yield from self.get_reply()
-        self.helo_resp = msg
+        await self.put_cmd("helo", name or self.local_hostname)
+        code, message = await self.get_reply()
+        self.last_helo_response = (code, message)
 
         if self.__class__.debug_level > 0:
-            print("HELO command: {0} {1}".format(code, msg))
+            print("HELO command: {0} {1}".format(code, message))
 
-        return (code, msg)
+        return code, message
 
-    @asyncio.coroutine
-    def ehlo(self, name=''):
+    async def ehlo(self, name=''):
         """ SMTP 'ehlo' command.
         Hostname to send for this command defaults to the FQDN of the local
         host.
         """
-        self.esmtp_features = {}
-        yield from self.put_cmd(self.ehlo_msg, name or self.local_hostname)
-        code, msg = yield from self.get_reply()
-
-        print("EHLO: {0} {1}".format(code, msg))
+        await self.put_cmd(self.ehlo_msg, name or self.local_hostname)
+        code, message = await self.get_reply()
+        self.last_ehlo_response = (code, message)
 
         # According to RFC1869 some (badly written)
         # MTA's will disconnect on an ehlo. Toss an exception if
         # that happens -ddm
         if code == -1 and len(msg) == 0:
             self.close()
-            raise SMTPServerDisconnected("Server not connected")
-
-        self.ehlo_resp = msg
+            raise SMTPServerDisconnectedError()
 
         if code != 250:
             return (code, msg)
@@ -555,8 +422,6 @@ class SMTP:
         assert isinstance(self.ehlo_resp, bytes), repr(self.ehlo_resp)
         resp = self.ehlo_resp.decode("latin-1").split('\n')
         # del resp[0]
-
-        print("EHLO resp: {0}".format(resp))
 
         for each in resp[1:]:
             # To be able to communicate with as many SMTP servers as possible,
@@ -594,21 +459,18 @@ class SMTP:
         """
         return opt.lower() in self.esmtp_features
 
-    @asyncio.coroutine
-    def help(self, args=''):
+    async def help(self, args=''):
         """SMTP 'help' command.
         Returns help text from server."""
-        yield from self.put_cmd("help", args)
+        await self.put_cmd("help", args)
 
-        return (yield from self.get_reply()[1])
+        return (await self.get_reply()[1])
 
-    @asyncio.coroutine
-    def rset(self):
+    async def rset(self):
         """SMTP 'rset' command -- resets session."""
-        return (yield from self.do_cmd("rset"))
+        return (await self.do_cmd("rset"))
 
-    @asyncio.coroutine
-    def _rset(self):
+    async def _rset(self):
         """Internal 'rset' command which ignores any SMTPServerDisconnected error.
 
         Used internally in the library, since the server disconnected error
@@ -616,41 +478,37 @@ class SMTP:
         we are doing an internal "safety" reset.
         """
         try:
-            yield from self.rset()
+            await self.rset()
         except SMTPServerDisconnected:
             pass
 
-    @asyncio.coroutine
-    def noop(self):
+    async def noop(self):
         """SMTP 'noop' command -- doesn't do anything :>"""
-        return (yield from self.do_cmd("noop"))
+        return (await self.do_cmd("noop"))
 
-    @asyncio.coroutine
-    def mail(self, sender, options=[]):
+    async def mail(self, sender, options=[]):
         """SMTP 'mail' command -- begins mail xfer session."""
         optionlist = ''
 
         if options and self.does_esmtp:
             optionlist = ' ' + ' '.join(options)
 
-        yield from self.put_cmd("mail", "FROM:%s%s" % (quoteaddr(sender), optionlist))
+        await self.put_cmd("mail", "FROM:%s%s" % (quoteaddr(sender), optionlist))
 
-        return (yield from self.get_reply())
+        return (await self.get_reply())
 
-    @asyncio.coroutine
-    def rcpt(self, recip, options=[]):
+    async def rcpt(self, recip, options=[]):
         """SMTP 'rcpt' command -- indicates 1 recipient for this mail."""
         optionlist = ''
 
         if options and self.does_esmtp:
             optionlist = ' ' + ' '.join(options)
 
-        yield from self.put_cmd("rcpt", "TO:%s%s" % (quoteaddr(recip), optionlist))
+        await self.put_cmd("rcpt", "TO:%s%s" % (quoteaddr(recip), optionlist))
 
-        return (yield from self.get_reply())
+        return (await self.get_reply())
 
-    @asyncio.coroutine
-    def data(self, msg):
+    async def data(self, msg):
         """SMTP 'DATA' command -- sends message data to server.
 
         Automatically quotes lines beginning with a period per rfc821.
@@ -660,14 +518,14 @@ class SMTP:
         is a string, lone '\\r' and '\\n' characters are converted to
         '\\r\\n' characters.  If msg is bytes, it is transmitted as is.
         """
-        yield from self.put_cmd("data")
-        code, repl = yield from self.get_reply()
+        await self.put_cmd("data")
+        code, repl = await self.get_reply()
 
         if self.__class__.debug_level > 0:
             print("data:", (code, repl), file=stderr)
 
         if code != 354:
-            raise SMTPDataError(code, repl)
+            raise SMTPDataRefusedError(code, repl)
         else:
             if isinstance(msg, str):
                 msg = _fix_eols(msg).encode('ascii')
@@ -677,33 +535,30 @@ class SMTP:
                 q = q + bCRLF
             q = q + b"." + bCRLF
 
-            yield from self.send(q)
-            code, msg = yield from self.get_reply()
+            await self.send(q)
+            code, msg = await self.get_reply()
 
             if self.__class__.debug_level > 0:
                 print("data:", (code, msg), file=stderr)
 
             return (code, msg)
 
-    @asyncio.coroutine
-    def verify(self, address):
+    async def verify(self, address):
         """SMTP 'verify' command -- checks for address validity."""
-        yield from self.put_cmd("vrfy", _addr_only(address))
-        return (yield from self.get_reply())
+        await self.put_cmd("vrfy", _addr_only(address))
+        return (await self.get_reply())
     # a.k.a.
     vrfy = verify
 
-    @asyncio.coroutine
-    def expn(self, address):
+    async def expn(self, address):
         """SMTP 'expn' command -- expands a mailing list."""
-        yield from self.put_cmd("expn", _addr_only(address))
+        await self.put_cmd("expn", _addr_only(address))
 
-        return (yield from self.get_reply())
+        return (await self.get_reply())
 
     # some useful methods
 
-    @asyncio.coroutine
-    def ehlo_or_helo_if_needed(self):
+    async def ehlo_or_helo_if_needed(self):
         """Call self.ehlo() and/or self.helo() if needed.
 
         If there has been no previous EHLO or HELO command this session, this
@@ -715,14 +570,13 @@ class SMTP:
                                   the helo greeting.
         """
         if self.helo_resp is None and self.ehlo_resp is None:
-            tmp, _ = yield from self.ehlo()
+            tmp, _ = await self.ehlo()
             if not (200 <= tmp <= 299):
-                (code, resp) = yield from self.helo()
+                (code, resp) = await self.helo()
                 if not (200 <= code <= 299):
                     raise SMTPHeloError(code, resp)
 
-    @asyncio.coroutine
-    def login(self, user, password):
+    async def login(self, user, password):
         """Log in on an SMTP server that requires authentication.
 
         The arguments are:
@@ -759,10 +613,11 @@ class SMTP:
         AUTH_CRAM_MD5 = "CRAM-MD5"
         AUTH_LOGIN = "LOGIN"
 
-        yield from self.ehlo_or_helo_if_needed()
+        await self.ehlo_or_helo_if_needed()
 
         if not self.has_extn("auth"):
-            raise SMTPException("SMTP AUTH extension not supported by server.")
+            err = "SMTP AUTH extension not supported."
+            raise SMTPCommandNotSupportedError(-1, err)
 
         # Authentication methods the server claims to support
         advertised_authlist = self.esmtp_features["auth"].split()
@@ -784,26 +639,26 @@ class SMTP:
         # all methods.
         for authmethod in authlist:
             if authmethod == AUTH_CRAM_MD5:
-                code, resp = yield from self.do_cmd("AUTH", AUTH_CRAM_MD5)
+                code, resp = await self.do_cmd("AUTH", AUTH_CRAM_MD5)
 
                 if code == 334:
                     cmd = encode_cram_md5(resp, user, password)
-                    code, resp = yield from self.do_cmd(cmd)
+                    code, resp = await self.do_cmd(cmd)
 
             elif authmethod == AUTH_PLAIN:
                 cmd = "{0} {1}".format(AUTH_PLAIN,
                                        encode_plain(user, password))
-                code, resp = yield from self.do_cmd("AUTH", cmd)
+                code, resp = await self.do_cmd("AUTH", cmd)
 
             elif authmethod == AUTH_LOGIN:
                 cmd = "{0} {1}".format(AUTH_LOGIN,
                                        encode_base64(user.encode('ascii'),
                                                      eol=''))
-                code, resp = yield from self.do_cmd("AUTH", cmd)
+                code, resp = await self.do_cmd("AUTH", cmd)
 
                 if code == 334:
                     cmd = encode_base64(password.encode('ascii'), eol='')
-                    code, resp = yield from self.do_cmd(cmd)
+                    code, resp = await self.do_cmd(cmd)
 
             # 235 == 'Authentication successful'
             # 503 == 'Error: already authenticated'
@@ -813,8 +668,7 @@ class SMTP:
         # We could not login sucessfully. Return result of last attempt.
         raise SMTPAuthenticationError(code, resp)
 
-    @asyncio.coroutine
-    def starttls(self, keyfile=None, certfile=None, context=None):
+    async def starttls(self, keyfile=None, certfile=None, context=None):
         """Puts the connection to the SMTP server into TLS mode.
 
         If there has been no previous EHLO or HELO command this session, this
@@ -831,26 +685,33 @@ class SMTP:
          SMTPHeloError            The server didn't reply properly to
                                   the helo greeting.
         """
-        yield from self.ehlo_or_helo_if_needed()
+        await self.ehlo_or_helo_if_needed()
 
         if not self.has_extn("starttls"):
-            raise SMTPException("STARTTLS extension not supported by server.")
-        resp, reply = yield from self.do_cmd("STARTTLS")
+            err = "STARTTLS extension not supported."
+            raise SMTPCommandNotSupportedError(err)
+
+        resp, reply = await self.do_cmd("STARTTLS")
 
         if resp == 220:
             if not _have_ssl:
                 raise RuntimeError("No SSL support included in this Python")
+
             if context is not None and keyfile is not None:
                 raise ValueError("context and keyfile arguments are mutually "
                                  "exclusive")
+
             if context is not None and certfile is not None:
                 raise ValueError("context and certfile arguments are mutually "
                                  "exclusive")
+
             if context is None:
                 context = ssl._create_stdlib_context(certfile=certfile,
                                                      keyfile=keyfile)
+
             self.sock = context.wrap_socket(self.sock,
                                             server_hostname=self._host)
+
             self.file = None
             # RFC 3207:
             # The client MUST discard any knowledge obtained from
@@ -860,10 +721,10 @@ class SMTP:
             self.ehlo_resp = None
             self.esmtp_features = {}
             self.does_esmtp = 0
+
         return (resp, reply)
 
-    @asyncio.coroutine
-    def sendmail(self, from_addr, to_addrs, msg, mail_options=[],
+    async def sendmail(self, from_addr, to_addrs, msg, mail_options=[],
                  rcpt_options=[]):
         """This command performs an entire mail transaction.
 
@@ -924,7 +785,7 @@ class SMTP:
         empty dictionary.
 
         """
-        yield from self.ehlo_or_helo_if_needed()
+        await self.ehlo_or_helo_if_needed()
 
         esmtp_opts = []
 
@@ -939,15 +800,15 @@ class SMTP:
 
             esmtp_opts.extend(mail_options)
 
-        code, resp = yield from self.mail(from_addr, esmtp_opts)
+        code, resp = await self.mail(from_addr, esmtp_opts)
 
         if code != 250:
             if code == 421:
                 self.close()
             else:
-                yield from self._rset()
+                await self._rset()
 
-            raise SMTPSenderRefused(code, resp, from_addr)
+            raise SMTPSenderRefusedError(from_addr, code, resp)
 
         senderrs = {}
 
@@ -955,35 +816,34 @@ class SMTP:
             to_addrs = [to_addrs]
 
         for each in to_addrs:
-            code, resp = yield from self.rcpt(each, rcpt_options)
+            code, resp = await self.rcpt(each, rcpt_options)
 
             if (code != 250) and (code != 251):
                 senderrs[each] = (code, resp)
 
             if code == 421:
                 self.close()
-                raise SMTPRecipientsRefused(senderrs)
+                raise SMTPAllRecipientsRefusedError(senderrs)
 
         if len(senderrs) == len(to_addrs):
             # the server refused all our recipients
-            yield from self._rset()
-            raise SMTPRecipientsRefused(senderrs)
+            await self._rset()
+            raise SMTPAllRecipientsRefusedError(senderrs)
 
-        code, resp = yield from self.data(msg)
+        code, resp = await self.data(msg)
 
         if code != 250:
             if code == 421:
                 self.close()
             else:
-                yield from self._rset()
+                await self._rset()
 
-            raise SMTPDataError(code, resp)
+            raise SMTPDataRefusedError(code, resp)
 
         # if we got here then somebody got our mail
         return senderrs
 
-    @asyncio.coroutine
-    def send_message(self, msg, from_addr=None, to_addrs=None,
+    async def send_message(self, msg, from_addr=None, to_addrs=None,
                      mail_options=[], rcpt_options={}):
         """Converts message to a bytestring and passes it to sendmail.
 
@@ -1037,7 +897,7 @@ class SMTP:
             g.flatten(msg_copy, linesep='\r\n')
             flatmsg = bytesmsg.getvalue()
 
-        return (yield from self.sendmail(from_addr, to_addrs, flatmsg,
+        return (await self.sendmail(from_addr, to_addrs, flatmsg,
                                          mail_options, rcpt_options))
 
     def close(self):
@@ -1058,8 +918,7 @@ class SMTP:
         self.esmtp_features = {}
         self.does_esmtp = False
 
-    @asyncio.coroutine
-    def quit(self):
+    async def quit(self):
         """
         Terminates the SMTP session.
 
@@ -1067,8 +926,8 @@ class SMTP:
         Raises SMTPResponseException if something wrong happens.
         """
         try:
-            code, message = yield from self.do_cmd("quit")
-        except SMTPServerDisconnected as e:
+            code, message = await self.do_cmd("quit")
+        except SMTPServerDisconnectedError as e:
             raise e
         except SMTPResponseException as e:
             raise e
