@@ -51,9 +51,7 @@ import copy
 from email.base64mime import body_encode as encode_base64
 from sys import stderr
 
-import threading
-
-from smtplibaio.exceptions import (
+from exceptions import (
     SMTPException,
     SMTPResponseException,
     SMTPConnectError,
@@ -76,7 +74,8 @@ bCRLF = b"\r\n"
 
 _MAXLINE = 8192  # more than 8 times larger than RFC 821, 4.5.3
 
-OLDSTYLE_AUTH = re.compile(r"auth=(.*)", re.I)
+OLDSTYLE_AUTH_REGEX = re.compile(r"auth=(?P<auth>.*)", re.I)
+EXTENSION_REGEX = re.compile(r"(?P<feature>[a-z0-9][a-z0-9\-]*) ?", re.I)
 
 
 def quoteaddr(addrstring):
@@ -164,9 +163,8 @@ class SMTP:
     _default_port = SMTP_PORT
     debug_level = 0
 
-    def __init__(self, hostname='localhost', port=_default_port,
-                 timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None,
-                 loop=None):
+    def __init__(self, hostname='localhost', port=_default_port, fqdn=None,
+                 timeout=socket._GLOBAL_DEFAULT_TIMEOUT, loop=None):
         """
         Initializes a new instance.
 
@@ -178,22 +176,25 @@ class SMTP:
 
         If a host is specified the connect method is called, and if it returns
         anything other than a success code an SMTPConnectError is raised.
- 
-        The `source_address` parameter takes a 2-tuple (host,
-        port) for the socket to bind to as its source address before
-        connecting.
         """
         self.hostname = hostname
-        self.port = port
+
+        try:
+            self.port = int(port)
+        except ValueError:
+            self.port = self.__class__._default_port
+
         self.timeout = timeout
 
-        self.source_address = source_address
+        self._fqdn = fqdn
 
         self.last_helo_response = (None, None)
         self.last_ehlo_response = (None, None)
         
         self.supports_esmtp = False
         self.esmtp_extensions = {}
+
+        self.auth_methods = []
 
         self.reader = None
         self.writer = None
@@ -206,6 +207,42 @@ class SMTP:
         Set the debug output level.
         """
         cls.debug_level = debuglevel
+
+    @property
+    def fqdn(self):
+        """
+        Returns the string used to identify the client when initiating a SMTP
+        session.
+
+        RFC 2821 tells us what to do:
+
+        * Use the client FQDN ;
+        * If it isn't available, we SHOULD fall back to an address literal.
+        """
+        if self._fqdn is None:
+            # Let's try to retrieve it:
+            self._fqdn = socket.getfqdn()
+
+            if '.' not in self._fqdn:
+                # FQDN doesn't seem to be valid, fall back to address literal,
+                # See RFC 2821 § 4.1.1.1 and § 4.1.3
+                try:
+                    info = socket.getaddrinfo(host='localhost',
+                                              port=None,
+                                              proto=socket.IPPROTO_TCP)
+                except socket.gaierror:
+                    addr = "127.0.0.1"
+                else:
+                    # We only consider the first returned result and we're only
+                    # interested in getting the IP(v4 or v6) address:
+                    addr = info[0][4][0]
+
+                self._fqdn = "[{}]".format(addr)
+
+        if self.__class__.debug_level > 0:
+            print("FQDN: {0}".format(self._fqdn), file=stderr)
+
+        return self._fqdn
 
     async def __aenter__(self):
         """
@@ -237,13 +274,12 @@ class SMTP:
         """
         if self.__class__.debug_level > 0:
             print("Connect: {0}"
-                  .format((self.host, self.port)),
+                  .format((self.hostname, self.port)),
                   file=stderr)
 
-        connect = asyncio.open_connection(self.hostname,
-                                          self.port,
+        connect = asyncio.open_connection(host=self.hostname,
+                                          port=self.port,
                                           ssl=False,
-                                          local_addr=self.source_address,
                                           loop=self.loop)
 
         try:
@@ -332,7 +368,7 @@ class SMTP:
                 # FIXME: we should not instanciate SMTPResponseException directly.
                 raise SMTPResponseException(500, "Line too long.")
 
-            msg = line[4:].strip(b' \t\r\n')
+            msg = line[4:].strip(b' \t\r\n').decode('ascii')
 
             resp.append(msg)
             code = line[:3]
@@ -353,87 +389,66 @@ class SMTP:
                       .format(errcode, msg),
                       file=stderr)
 
-        errmsg = b"\n".join(resp)
+        errmsg = "\n".join(resp)
 
         return errcode, errmsg
 
-    async def do_cmd(self, cmd, args=""):
+    async def do_cmd(self, cmd, args=None):
         """
         Sends the given command to the server.
 
-        Returns a tuple containing the response code and message.
+        Returns a (code, message) tuple containing the server response.
         """
         await self.put_cmd(cmd, args)
 
         return await self.get_reply()
 
-    async def helo(self, name=''):
-        """SMTP 'helo' command.
-        Hostname to send for this command defaults to the FQDN of the local
-        host.
+    async def helo(self, from_host=None):
         """
-        code, message = await self.do_cmd("helo", name or self.local_hostname)
+        Sends a SMTP 'HELO' command. - Identifies the client to the server.
+
+        If given `from_host` is None, defaults to FQDN.
+
+        Raises SMTPHeloRefusedError when the server refuses the connection.
+
+        Returns a (code, message) tuple containing the server response.
+        """
+        if from_host is None:
+            from_host = self.fqdn
+
+        code, message = await self.do_cmd('HELO', from_host)
         self.last_helo_response = (code, message)
 
-        if self.__class__.debug_level > 0:
-            print("HELO command: {0} {1}".format(code, message))
+        if code != 250:
+            raise SMTPHeloRefusedError(code, message)
 
         return code, message
 
-    async def ehlo(self, name=''):
-        """ SMTP 'ehlo' command.
-        Hostname to send for this command defaults to the FQDN of the local
-        host.
+    async def ehlo(self, from_host=None):
         """
-        code, message = self.do_cmd(self.ehlo_msg, name or self.local_hostname)
+        Sends a SMTP 'EHLO' command. - Identifies the client to the server.
+
+        If given `from_host` is None, defaults to FQDN.
+
+        Raises SMTPHeloRefusedError when the server refuses the connection.
+
+        Returns a (code, message) tuple containing the server response.
+        """
+        if from_host is None:
+            from_host = self.fqdn
+
+        code, message = await self.do_cmd('EHLO', from_host)
         self.last_ehlo_response = (code, message)
 
-        # According to RFC1869 some (badly written)
-        # MTA's will disconnect on an ehlo. Toss an exception if
-        # that happens -ddm
-        if code == -1 and len(msg) == 0:
-            self.close()
-            raise SMTPServerDisconnectedError()
-
         if code != 250:
-            return (code, msg)
+            raise SMTPHeloRefusedError(code, message)
 
-        self.does_esmtp = 1
+        extns, auths = SMTP.parse_esmtp_extensions(message)
+        self.esmtp_extensions = extns
+        self.auth_methods = auths
+        self.supports_esmtp = True
 
-        # parse the ehlo response -ddm
-        assert isinstance(self.ehlo_resp, bytes), repr(self.ehlo_resp)
-        resp = self.ehlo_resp.decode("latin-1").split('\n')
-        # del resp[0]
-
-        for each in resp[1:]:
-            # To be able to communicate with as many SMTP servers as possible,
-            # we have to take the old-style auth advertisement into account,
-            # because:
-            # 1) Else our SMTP feature parser gets confused.
-            # 2) There are some servers that only advertise the auth methods we
-            #    support using the old style.
-            auth_match = OLDSTYLE_AUTH.match(each)
-
-            if auth_match:
-                # This doesn't remove duplicates, but that's no problem
-                self.esmtp_features["auth"] = self.esmtp_features.get("auth", "") \
-                        + " " + auth_match.groups(0)[0]
-                continue
-
-            # RFC 1869 requires a space between ehlo keyword and parameters.
-            # It's actually stricter, in that only spaces are allowed between
-            # parameters, but were not going to check for that here.  Note
-            # that the space isn't present if there are no parameters.
-            m = re.match(r'(?P<feature>[A-Za-z0-9][A-Za-z0-9\-]*) ?', each)
-            if m:
-                feature = m.group("feature").lower()
-                params = m.string[m.end("feature"):].strip()
-                if feature == "auth":
-                    self.esmtp_features[feature] = self.esmtp_features.get(feature, "") \
-                            + " " + params
-                else:
-                    self.esmtp_features[feature] = params
-        return (code, msg)
+        return code, message
 
     def has_extn(self, opt):
         """
@@ -455,7 +470,7 @@ class SMTP:
         """
         Sends a SMTP 'RSET' command. - Resets the session.
 
-        Returns a (code, message) tuple representing the server response.
+        Returns a (code, message) tuple containing the server response.
         """
         return await self.do_cmd('RSET')
 
@@ -478,7 +493,7 @@ class SMTP:
         """
         Sends a SMTP 'NOOP' command. - Doesn't do anything.
 
-        Returns a (code, message) tuple representing the server response.
+        Returns a (code, message) tuple containing the server response.
         """
         return await self.do_cmd('NOOP')
 
@@ -486,7 +501,7 @@ class SMTP:
         """
         Sends a SMTP 'VRFY' command. - Tests the validity of the given address.
 
-        Returns a (code, message) tuple representing the server response.
+        Returns a (code, message) tuple containing the server response.
         """
         return await self.do_cmd('VRFY', _addr_only(address))
 
@@ -494,7 +509,7 @@ class SMTP:
         """
         Sends a SMTP 'EXPN' command. - Expands a mailing-list.
 
-        Returns a (code, message) tuple representing the server response.
+        Returns a (code, message) tuple containing the server response.
         """
         return await self.do_cmd('EXPN', _addr_only(address))
 
@@ -502,7 +517,7 @@ class SMTP:
         """
         Send a SMTP 'MAIL' command. - Starts the mail transfer session.
 
-        Returns a (code, message) tuple representing the server response.
+        Returns a (code, message) tuple containing the server response.
 
         # FIXME: we should probably raise a SMTPSenderRefusedError in some
                  cases.
@@ -520,7 +535,7 @@ class SMTP:
         """
         Sends a SMTP 'RCPT' command. - Indicates a recipient for the e-mail.
 
-        Returns a (code, message) tuple representing the server response.
+        Returns a (code, message) tuple containing the server response.
 
         # FIXME: we should probably raise a SMTPRecipientRefusedError in some
                  cases.
@@ -538,7 +553,7 @@ class SMTP:
         """
         Sends a SMTP 'QUIT' command. - Ends the session.
 
-        Returns a (code, message) tuple representing the server response.
+        Returns a (code, message) tuple containing the server response.
 
         # FIXME: should we explicitly ignore Exceptions to make sure
         `close` is called ?
@@ -940,6 +955,50 @@ class SMTP:
         self.supports_esmtp = False
         self.esmtp_extensions = {}
 
+    @staticmethod
+    def parse_esmtp_extensions(message):
+        """
+        """
+        extns = {}
+        auths = []
+
+        lines = message.splitlines()
+
+        for line in lines[1:]:
+            # To be able to communicate with as many SMTP servers as possible,
+            # we have to take the old-style auth advertisement into account,
+            # because:
+            # 1. Else our SMTP feature parser gets confused.
+            # 2. There are some servers that only advertise the auth methods we
+            #    support using the old style.
+            match = OLDSTYLE_AUTH_REGEX.match(line)
+
+            if match:
+                auth = match.group('auth')[0]
+                auth = auth.lower().strip()
+
+                if auth not in auths:
+                    auths.append(auth)
+
+            # RFC 1869 requires a space between ehlo keyword and parameters.
+            # It's actually stricter, in that only spaces are allowed between
+            # parameters, but were not going to check for that here.
+            # Note that the space isn't present if there are no parameters.
+            match = EXTENSION_REGEX.match(line)
+
+            if match:
+                feature = match.group("feature").lower()
+                params = match.string[match.end("feature"):].strip()
+
+                extns[feature] = params
+
+                if feature == "auth":
+                    auths.extend([param.strip().lower()
+                                  for param
+                                  in params.split()])
+
+        return extns, auths
+
 if _have_ssl:
 
     class SMTP_SSL(SMTP):
@@ -1002,34 +1061,3 @@ if _have_ssl:
             new_socket = self.context.wrap_socket(new_socket, server_hostname=host)
 
             return new_socket
-
-    __all__.append("SMTP_SSL")
-
-
-# Test the sendmail method, which tests most of the others.
-# Note: This always sends to localhost.
-if __name__ == '__main__':
-    print("test need to written for asyncio")
-    import sys
-    sys.exit(0)
-
-    def prompt(prompt):
-        sys.stdout.write(prompt + ": ")
-        sys.stdout.flush()
-        return sys.stdin.readline().strip()
-
-    fromaddr = prompt("From")
-    toaddrs = prompt("To").split(',')
-    print("Enter message, end with ^D:")
-    msg = ''
-    while 1:
-        line = sys.stdin.readline()
-        if not line:
-            break
-        msg = msg + line
-    print("Message length is %d" % len(msg))
-
-    server = SMTP('localhost')
-    server.set_debuglevel(1)
-    server.sendmail(fromaddr, toaddrs, msg)
-    server.quit()
