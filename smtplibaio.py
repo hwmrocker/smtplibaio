@@ -200,22 +200,6 @@ class SMTP:
 
         self.loop = loop or asyncio.get_event_loop()
 
-        # self.helo_resp = None
-        # self.ehlo_msg = "ehlo"
-        # self.ehlo_resp = None
-        # self.does_esmtp = False
-
-        # self.esmtp_features = {}
-        # self.source_address = source_address
-
-        # self._loop = loop if loop else asyncio.get_event_loop()
-
-        # self._reader = None
-        # self._writer = None
-
-        # self._set_host_and_port(host, port) \
-        #     ._set_local_hostname(local_hostname)
-
     @classmethod
     def set_debuglevel(cls, debuglevel):
         """
@@ -296,7 +280,7 @@ class SMTP:
             # Don't try/except here since this will "mask" the
             # GeneratorExit Exception that has to be raised.
             self.writer.write(s)
-            await self._writer.drain()
+            await self.writer.drain()
 
     async def put_cmd(self, cmd, args=None):
         """
@@ -388,8 +372,7 @@ class SMTP:
         Hostname to send for this command defaults to the FQDN of the local
         host.
         """
-        await self.put_cmd("helo", name or self.local_hostname)
-        code, message = await self.get_reply()
+        code, message = await self.do_cmd("helo", name or self.local_hostname)
         self.last_helo_response = (code, message)
 
         if self.__class__.debug_level > 0:
@@ -402,8 +385,7 @@ class SMTP:
         Hostname to send for this command defaults to the FQDN of the local
         host.
         """
-        await self.put_cmd(self.ehlo_msg, name or self.local_hostname)
-        code, message = await self.get_reply()
+        code, message = self.do_cmd(self.ehlo_msg, name or self.local_hostname)
         self.last_ehlo_response = (code, message)
 
         # According to RFC1869 some (badly written)
@@ -460,18 +442,28 @@ class SMTP:
         return opt.lower() in self.esmtp_features
 
     async def help(self, args=''):
-        """SMTP 'help' command.
-        Returns help text from server."""
-        await self.put_cmd("help", args)
+        """
+        Sends a SMTP 'HELP' command.
 
-        return (await self.get_reply()[1])
+        Returns help text as given by the server.
+        """
+        code, message = await self.do_cmd('HELP', args)
+
+        return message
 
     async def rset(self):
-        """SMTP 'rset' command -- resets session."""
-        return (await self.do_cmd("rset"))
+        """
+        Sends a SMTP 'RSET' command. - Resets the session.
+
+        Returns a (code, message) tuple representing the server response.
+        """
+        return await self.do_cmd('RSET')
 
     async def _rset(self):
-        """Internal 'rset' command which ignores any SMTPServerDisconnected error.
+        """
+        # FIXME: most probably to be removed.
+
+        Internal 'RSET' command which ignores any SMTPServerDisconnected error.
 
         Used internally in the library, since the server disconnected error
         should appear to the application when the *next* command is issued, if
@@ -483,30 +475,78 @@ class SMTP:
             pass
 
     async def noop(self):
-        """SMTP 'noop' command -- doesn't do anything :>"""
-        return (await self.do_cmd("noop"))
+        """
+        Sends a SMTP 'NOOP' command. - Doesn't do anything.
 
-    async def mail(self, sender, options=[]):
-        """SMTP 'mail' command -- begins mail xfer session."""
-        optionlist = ''
+        Returns a (code, message) tuple representing the server response.
+        """
+        return await self.do_cmd('NOOP')
 
-        if options and self.does_esmtp:
-            optionlist = ' ' + ' '.join(options)
+    async def vrfy(self, address):
+        """
+        Sends a SMTP 'VRFY' command. - Tests the validity of the given address.
 
-        await self.put_cmd("mail", "FROM:%s%s" % (quoteaddr(sender), optionlist))
+        Returns a (code, message) tuple representing the server response.
+        """
+        return await self.do_cmd('VRFY', _addr_only(address))
 
-        return (await self.get_reply())
+    async def expn(self, address):
+        """
+        Sends a SMTP 'EXPN' command. - Expands a mailing-list.
 
-    async def rcpt(self, recip, options=[]):
-        """SMTP 'rcpt' command -- indicates 1 recipient for this mail."""
-        optionlist = ''
+        Returns a (code, message) tuple representing the server response.
+        """
+        return await self.do_cmd('EXPN', _addr_only(address))
 
-        if options and self.does_esmtp:
-            optionlist = ' ' + ' '.join(options)
+    async def mail(self, sender, options=None):
+        """
+        Send a SMTP 'MAIL' command. - Starts the mail transfer session.
 
-        await self.put_cmd("rcpt", "TO:%s%s" % (quoteaddr(recip), optionlist))
+        Returns a (code, message) tuple representing the server response.
 
-        return (await self.get_reply())
+        # FIXME: we should probably raise a SMTPSenderRefusedError in some
+                 cases.
+        """
+        if options is None:
+            options = []
+
+        from_addr = "FROM:{}".format(quoteaddr(sender))
+
+        code, message = await self.do_cmd('MAIL', from_addr, *options)
+
+        return code, message
+
+    async def rcpt(self, recipient, options=None):
+        """
+        Sends a SMTP 'RCPT' command. - Indicates a recipient for the e-mail.
+
+        Returns a (code, message) tuple representing the server response.
+
+        # FIXME: we should probably raise a SMTPRecipientRefusedError in some
+                 cases.
+        """
+        if options is None:
+            options = []
+
+        to_addr = "TO:{}".format(quoteaddr(recipient))
+
+        code, message = await self.do_cmd('RCPT', to_addr, *options)
+
+        return code, message
+
+    async def quit(self):
+        """
+        Sends a SMTP 'QUIT' command. - Ends the session.
+
+        Returns a (code, message) tuple representing the server response.
+
+        # FIXME: should we explicitly ignore Exceptions to make sure
+        `close` is called ?
+        """
+        code, message = await self.do_cmd('QUIT')
+        await self.close()
+
+        return code, message
 
     async def data(self, msg):
         """SMTP 'DATA' command -- sends message data to server.
@@ -543,21 +583,6 @@ class SMTP:
 
             return (code, msg)
 
-    async def verify(self, address):
-        """SMTP 'verify' command -- checks for address validity."""
-        await self.put_cmd("vrfy", _addr_only(address))
-        return (await self.get_reply())
-    # a.k.a.
-    vrfy = verify
-
-    async def expn(self, address):
-        """SMTP 'expn' command -- expands a mailing list."""
-        await self.put_cmd("expn", _addr_only(address))
-
-        return (await self.get_reply())
-
-    # some useful methods
-
     async def ehlo_or_helo_if_needed(self):
         """Call self.ehlo() and/or self.helo() if needed.
 
@@ -574,7 +599,7 @@ class SMTP:
             if not (200 <= tmp <= 299):
                 (code, resp) = await self.helo()
                 if not (200 <= code <= 299):
-                    raise SMTPHeloError(code, resp)
+                    raise SMTPHeloiRefusedError(code, resp)
 
     async def login(self, user, password):
         """Log in on an SMTP server that requires authentication.
@@ -900,44 +925,20 @@ class SMTP:
         return (await self.sendmail(from_addr, to_addrs, flatmsg,
                                          mail_options, rcpt_options))
 
-    def close(self):
+    async def close(self):
         """
-        Cleans up after the connection to the SMTP server
-        has been closed voluntarily or not).
-        
-        Resets `_writer`, `ehlo_resp`, `helo_resp`, `esmtp_features`
-        and `does_smtp`.
+        Cleans up after the connection to the SMTP server has been closed
+        (voluntarily or not).
         """
-        self.is_connected = False
+        if self.writer is not None:
+            self.writer.close()
 
-        if self._writer is not None:
-            self._writer.close()
-
-        self._writer = None
-        self.ehlo_resp = self.helo_resp = None
-        self.esmtp_features = {}
-        self.does_esmtp = False
-
-    async def quit(self):
-        """
-        Terminates the SMTP session.
-
-        Raises SMTPServerDisconnected if the connection is already closed.
-        Raises SMTPResponseException if something wrong happens.
-        """
-        try:
-            code, message = await self.do_cmd("quit")
-        except SMTPServerDisconnectedError as e:
-            raise e
-        except SMTPResponseException as e:
-            raise e
-        else:
-            if code != 221:
-                raise SMTPResponseException(code, message)
-        finally:
-            self.close
-
-        return (code, message)
+        self.reader = None
+        self.writer = None
+        self.last_helo_response = (None, None)
+        self.last_ehlo_response = (None, None)
+        self.supports_esmtp = False
+        self.esmtp_extensions = {}
 
 if _have_ssl:
 
