@@ -402,7 +402,8 @@ class SMTP:
 
     async def helo(self, from_host=None):
         """
-        Sends a SMTP 'HELO' command. - Identifies the client to the server.
+        Sends a SMTP 'HELO' command. - Identifies the client and starts the
+        session.
 
         If given `from_host` is None, defaults to FQDN.
 
@@ -423,7 +424,8 @@ class SMTP:
 
     async def ehlo(self, from_host=None):
         """
-        Sends a SMTP 'EHLO' command. - Identifies the client to the server.
+        Sends a SMTP 'EHLO' command. - Identifies the client and starts the
+        session.
 
         If given `from_host` is None, defaults to FQDN.
 
@@ -437,6 +439,7 @@ class SMTP:
         code, message = await self.do_cmd('EHLO', from_host)
         self.last_ehlo_response = (code, message)
 
+        #if code in ():
         if code != 250:
             raise SMTPHeloRefusedError(code, message)
 
@@ -595,24 +598,6 @@ class SMTP:
             print("DATA: {0}".format(code, message), file=stderr)
 
         return code, message
-
-    async def ehlo_or_helo_if_needed(self):
-        """Call self.ehlo() and/or self.helo() if needed.
-
-        If there has been no previous EHLO or HELO command this session, this
-        method tries ESMTP EHLO first.
-
-        This method may raise the following exceptions:
-
-         SMTPHeloError            The server didn't reply properly to
-                                  the helo greeting.
-        """
-        if self.helo_resp is None and self.ehlo_resp is None:
-            tmp, _ = await self.ehlo()
-            if not (200 <= tmp <= 299):
-                (code, resp) = await self.helo()
-                if not (200 <= code <= 299):
-                    raise SMTPHeloiRefusedError(code, resp)
 
     async def login(self, user, password):
         """Log in on an SMTP server that requires authentication.
@@ -937,6 +922,27 @@ class SMTP:
 
         return (await self.sendmail(from_addr, to_addrs, flatmsg,
                                          mail_options, rcpt_options))
+
+    async def ehlo_or_helo_if_needed(self):
+        """
+        Calls `ehlo()` and/or `helo()` if needed.
+
+        If there hasn't been any previous EHLO or HELO command this session,
+        tries to initiate the session. ESMTP EHLO is tried first.
+
+        Raises SMTPHeloRefusedError when the server doesn't reply properly to
+        neither of EHLO and HELO commands.
+        """
+        no_helo = self.last_helo_response == (None, None)
+        no_ehlo = self.last_ehlo_response == (None, None)
+
+        if no_helo and no_ehlo:
+            try:
+                # First we try EHLO:
+                await self.ehlo()
+            except SMTPHeloRefusedError:
+                # EHLO failed, let's try HELO:
+                await self.helo()
 
     async def close(self):
         """
