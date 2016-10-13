@@ -450,12 +450,6 @@ class SMTP:
 
         return code, message
 
-    def has_extn(self, opt):
-        """
-        Returns True if the server supports the given SMTP service extension.
-        """
-        return opt.lower() in self.esmtp_features
-
     async def help(self, args=''):
         """
         Sends a SMTP 'HELP' command.
@@ -662,7 +656,7 @@ class SMTP:
 
         await self.ehlo_or_helo_if_needed()
 
-        if not self.has_extn("auth"):
+        if "auth" not in self.esmtp_extensions:
             err = "SMTP AUTH extension not supported."
             raise SMTPCommandNotSupportedError(-1, err)
 
@@ -734,7 +728,7 @@ class SMTP:
         """
         await self.ehlo_or_helo_if_needed()
 
-        if not self.has_extn("starttls"):
+        if "starttls" not in self.esmtp_extensions:
             err = "STARTTLS extension not supported."
             raise SMTPCommandNotSupportedError(err)
 
@@ -842,7 +836,7 @@ class SMTP:
         if self.does_esmtp:
             # Hmmm? what's this? -ddm
             # self.esmtp_features['7bit']=""
-            if self.has_extn('size'):
+            if "size" in self.esmtp_extensions:
                 esmtp_opts.append("size=%d" % len(msg))
 
             esmtp_opts.extend(mail_options)
@@ -1007,7 +1001,7 @@ class SMTP:
         return extns, auths
 
 
- class SMTP_SSL(SMTP):
+class SMTP_SSL(SMTP):
     """
     This is a subclass derived from SMTP that connects over an SSL
     encrypted socket (to use this class you need a socket module that was
@@ -1034,7 +1028,7 @@ class SMTP:
 
         super().__init__(self, host, port, fqdn, timeout)
 
-     async def connect(self):
+    async def connect(self):
         """
         Connects to the server.
 
