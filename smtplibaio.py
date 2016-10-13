@@ -47,6 +47,7 @@ import email.generator
 import base64
 import hmac
 import copy
+import ssl
 
 from email.base64mime import body_encode as encode_base64
 from sys import stderr
@@ -121,13 +122,6 @@ def _quote_periods(bindata):
 def _fix_eols(data):
     return re.sub(r'(?:\r\n|\n|\r(?!\n))', CRLF, data)
 
-try:
-    import ssl
-except ImportError:
-    _have_ssl = False
-else:
-    _have_ssl = True
-
 
 class SMTP:
     # FIXME: rewrite docstring
@@ -185,28 +179,11 @@ class SMTP:
             self.port = self.__class__._default_port
 
         self.timeout = timeout
-
         self._fqdn = fqdn
 
-        self.last_helo_response = (None, None)
-        self.last_ehlo_response = (None, None)
-        
-        self.supports_esmtp = False
-        self.esmtp_extensions = {}
-
-        self.auth_methods = []
-
-        self.reader = None
-        self.writer = None
+        self.reset_state()
 
         self.loop = loop or asyncio.get_event_loop()
-
-    @classmethod
-    def set_debuglevel(cls, debuglevel):
-        """
-        Set the debug output level.
-        """
-        cls.debug_level = debuglevel
 
     @property
     def fqdn(self):
@@ -243,6 +220,26 @@ class SMTP:
             print("FQDN: {0}".format(self._fqdn), file=stderr)
 
         return self._fqdn
+
+    def reset_state(self):
+        """
+        Resets some attributes to their default values.
+
+        This is especially useful when initializing a newly created SMTP
+        instance and when closing an existing SMTP session.
+
+        It allows us to use the same SMTP instance and connect several times.
+        """
+        self.last_helo_response = (None, None)
+        self.last_ehlo_response = (None, None)
+
+        self.supports_esmtp = False
+        self.esmtp_extensions = {}
+
+        self.auth_methods = []
+
+        self.reader = None
+        self.writer = None
 
     async def __aenter__(self):
         """
@@ -949,12 +946,14 @@ class SMTP:
         if self.writer is not None:
             self.writer.close()
 
-        self.reader = None
-        self.writer = None
-        self.last_helo_response = (None, None)
-        self.last_ehlo_response = (None, None)
-        self.supports_esmtp = False
-        self.esmtp_extensions = {}
+        self.reset_state()
+
+    @classmethod
+    def set_debuglevel(cls, debuglevel):
+        """
+        Set the debug output level.
+        """
+        cls.debug_level = debuglevel
 
     @staticmethod
     def parse_esmtp_extensions(message):
