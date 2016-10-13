@@ -124,3 +124,14 @@ class SMTPAuthenticationError(SMTPResponseException):
     Raised when the server rejects our authentication attempt.
     """
     default_message = "Authentication failed."
+
+
+class SMTPResponseLineTooLongError(SMTPResponseException):
+    """
+    Raised when a reply sent by server exceeds the limit set.
+    """
+    def __init__(self):
+        """
+        RFC 2821 tells us this is a code 500 error.
+        """
+        super().__init__(500, "Server response is (way) too long.")

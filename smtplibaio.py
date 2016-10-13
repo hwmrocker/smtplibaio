@@ -53,8 +53,6 @@ from email.base64mime import body_encode as encode_base64
 from sys import stderr
 
 from exceptions import (
-    SMTPException,
-    SMTPResponseException,
     SMTPConnectError,
     SMTPServerDisconnectedError,
     SMTPCommandNotSupportedError,
@@ -65,6 +63,7 @@ from exceptions import (
     SMTPHeloRefusedError,
     SMTPAuthenticationError
 )
+from streams import SMTPStreamReader, SMTPStreamWriter
 
 
 SMTP_PORT = 25
@@ -240,6 +239,7 @@ class SMTP:
 
         self.reader = None
         self.writer = None
+        self.transport = None
 
     async def __aenter__(self):
         """
@@ -266,6 +266,8 @@ class SMTP:
         We use `asyncio Streams`_.
 
         Note: This method is automatically invoked by `__aenter__`.
+              Mostly borrowed from asyncio.streams.open_connection(...)
+              source code.
 
         .. _`asyncio Streams`: https://docs.python.org/3/library/asyncio-stream.html
         """
@@ -274,131 +276,51 @@ class SMTP:
                   .format((self.hostname, self.port)),
                   file=stderr)
 
-        connect = asyncio.open_connection(host=self.hostname,
-                                          port=self.port,
-                                          ssl=False,
-                                          loop=self.loop)
+        # First build the reader:
+        self.reader = SMTPStreamReader(loop=self.loop)
+
+        # Then build the protocol:
+        protocol = asyncio.StreamReaderProtocol(self.reader, loop=self.loop)
+
+        # With the just-built reader and protocol, create the connection and
+        # get the transport stream:
+        conn = {
+            'protocol_factory': lambda: protocol,
+            'host': self.hostname,
+            'port': self.port,
+            'ssl': False
+        }
 
         try:
-            self.reader, self.writer = await connect
-        except socket.gaierror as e:
-            raise SMTPConnectError(e.errno, e.strerror)
+            self.transport, _ = await self.loop.create_connection(**conn)
+        except OSError as e:
+            raise SMTPConnectError(e)
+        else:
+            # If the connection has been established, build the writer:
+            self.writer = SMTPStreamWriter(self.transport, protocol,
+                                           self.reader, self.loop)
 
-        code, msg = await self.get_reply()
+        code, message = await self.reader.read_reply()
 
         if self.__class__.debug_level > 0:
-            print("Connect: {0} {1}"
-                  .format(code, msg),
-                  file=stderr)
+            print("Connect: {0} {1}".format(code, message), file=stderr)
 
         if code != 220:
-            raise SMTPConnectError(code, msg)
+            raise SMTPConnectError(code, message)
 
-    async def send(self, s):
-        """
-        Sends the given string to the server.
-        """
-        if self.__class__.debug_level > 0:
-            print("Send: {0}".format(repr(s)), file=stderr)
-
-        # Check if we have a writer
-        # (should be the case if we are connected):
-        if self.writer is None:
-            self.close()
-            raise SMTPServerDisconnectedError()
-        else:
-            if isinstance(s, str):
-                s = s.encode("ascii")
-
-            # Don't try/except here since this will "mask" the
-            # GeneratorExit Exception that has to be raised.
-            self.writer.write(s)
-            await self.writer.drain()
-
-    async def put_cmd(self, cmd, args=None):
-        """
-        Sends a command to the server.
-        """
-        if args is None:
-            str = '%s%s' % (cmd, CRLF)
-        else:
-            str = '%s %s%s' % (cmd, args, CRLF)
-
-        try:
-            await self.send(str)
-        except OSError as e:
-            self.close()
-            raise SMTPServerDisconnectedError(e)
-
-    async def get_reply(self):
-        """
-        Gets a reply from the server.
-
-        Returns a tuple consisting of:
-
-          - server response code (e.g. '250', or such, if all goes well)
-            Note: returns -1 if it can't read response code.
-
-          - server response string corresponding to response code (multiline
-            responses are converted to a single, multiline string).
-
-        Raises SMTPServerDisconnected if end-of-file is reached.
-        """
-        errcode = -1
-        resp = []
-
-        go_on = True
-
-        while go_on:
-            try:
-                line = await self.reader.readline()
-            except OSError as e:
-                self.close()
-                raise SMTPServerDisconnectedError(e)
-                
-            if not line:
-                self.close()
-                raise SMTPServerDisconnectedError()
-
-            if len(line) > _MAXLINE:
-                self.close()
-                # FIXME: we should not instanciate SMTPResponseException directly.
-                raise SMTPResponseException(500, "Line too long.")
-
-            msg = line[4:].strip(b' \t\r\n').decode('ascii')
-
-            resp.append(msg)
-            code = line[:3]
-
-            # Check that the error code is syntactically correct.
-            # Don't attempt to read a continuation line if it is broken.
-            try:
-                errcode = int(code)
-            except ValueError:
-                errcode = -1
-                go_on = False
-            else:
-                # Check if we have a multiline response:
-                go_on = (line[3:4] == b'-')
-
-            if self.__class__.debug_level > 0:
-                print("Reply: code: {0}, msg: {1}"
-                      .format(errcode, msg),
-                      file=stderr)
-
-        errmsg = "\n".join(resp)
-
-        return errcode, errmsg
-
-    async def do_cmd(self, cmd, args=None):
+    async def do_cmd(self, *args):
         """
         Sends the given command to the server.
 
         Returns a (code, message) tuple containing the server response.
         """
-        await self.put_cmd(cmd, args)
+        # FIXME: should we do some check before ?
+        if self.__class__.debug_level > 0:
+            print("Send: {0}".format(" ".join(args)), file=stderr)
 
-        return await self.get_reply()
+        await self.writer.send_command(*args)
+
+        return await self.reader.read_reply()
 
     async def helo(self, from_host=None):
         """
@@ -439,7 +361,6 @@ class SMTP:
         code, message = await self.do_cmd('EHLO', from_host)
         self.last_ehlo_response = (code, message)
 
-        #if code in ():
         if code != 250:
             raise SMTPHeloRefusedError(code, message)
 
@@ -591,8 +512,8 @@ class SMTP:
 
         q = q + b"." + bCRLF
 
-        await self.send(q)
-        code, message = await self.get_reply()
+        await self.writer.send_command(q)
+        code, message = await self.reader.read_reply()
 
         if self.__class__.debug_level > 0:
             print("DATA: {0}".format(code, message), file=stderr)
