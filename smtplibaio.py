@@ -1,29 +1,23 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-'''SMTP/ESMTP client class.
+"""
+SMTP/ESMTP client class.
 
-This should follow RFC 821 (SMTP), RFC 1869 (ESMTP), RFC 2554 (SMTP
+This should follow RFC 2821 (SMTP), RFC 1869 (ESMTP), RFC 2554 (SMTP
 Authentication) and RFC 2487 (Secure SMTP over TLS).
-
-Notes:
-
-Please remember, when doing ESMTP, that the names of the SMTP service
-extensions are NOT the same thing as the option keywords for the RCPT
-and MAIL commands!
 
 Example:
 
-async def send(from_email, to_email, msg)
-    server = SMTP_SSL()
-    code, _ = await server.connect(mail_server)
-    assert code == 220, "connect failed"
-    try:
-        await server.login(mailbox_name, mailbox_password)
-        await server.sendmail(from_email, to_email, msg.as_string())
-    finally:
-        await server.quit()
-'''
+    async def sendSSL(from_addr, to_addr, msg, mailbox_name, mailbox_pwd):
+        try:
+            async with SMTP_SSL() as server:
+                server.login(mailbox_name, mailbox_pwd)
+                server.sendmail(from_addr, to_addr, msg.as_string())
+        except SMTPConnectError as e:
+            print(e, file=sys.stderr)
+
+"""
 
 # Author: The Dragon De Monsyne <dragondm@integral.org>
 # ESMTP support, test code and doc fixes added by
@@ -61,7 +55,8 @@ from exceptions import (
     SMTPAllRecipientsRefusedError,
     SMTPDataRefusedError,
     SMTPHeloRefusedError,
-    SMTPAuthenticationError
+    SMTPAuthenticationError,
+    SMTPResponseLineTooLongError,
 )
 from streams import SMTPStreamReader, SMTPStreamWriter
 
@@ -294,16 +289,21 @@ class SMTP:
         try:
             self.transport, _ = await self.loop.create_connection(**conn)
         except OSError as e:
+            # FIXME: we need a code here !
             raise SMTPConnectError(e)
-        else:
-            # If the connection has been established, build the writer:
-            self.writer = SMTPStreamWriter(self.transport, protocol,
-                                           self.reader, self.loop)
 
-        code, message = await self.reader.read_reply()
+        # If the connection has been established, build the writer:
+        self.writer = SMTPStreamWriter(self.transport, protocol, self.reader,
+                                       self.loop)
+
+        try:
+            code, message = await self.reader.read_reply()
+        except SMTPResponseLineTooLongError as e:
+            raise SMTPConnectError(e.code, e.message)
 
         if self.__class__.debug_level > 0:
-            print("Connect: {0} {1}".format(code, message), file=stderr)
+            print("Reply: code: {} - msg: {}".format(code, message),
+                  file=stderr)
 
         if code != 220:
             raise SMTPConnectError(code, message)
@@ -320,7 +320,16 @@ class SMTP:
 
         await self.writer.send_command(*args)
 
-        return await self.reader.read_reply()
+        try:
+            code, message = await self.reader.read_reply()
+        except SMTPResponseLineTooLongError as e:
+            raise e
+
+        if self.__class__.debug_level > 0:
+            print("Reply: code: {} - msg: {}".format(code, message),
+                  file=stderr)
+
+        return code, message
 
     async def helo(self, from_host=None):
         """
@@ -496,7 +505,7 @@ class SMTP:
         code, message = await self.do_cmd('DATA')
 
         if self.__class__.debug_level > 0:
-            print("DATA: {0}".format(code, message), file=stderr)
+            print("DATA: {} {}".format(code, message), file=stderr)
 
         if code != 354:
             raise SMTPDataRefusedError(code, message)
@@ -512,11 +521,14 @@ class SMTP:
 
         q = q + b"." + bCRLF
 
-        await self.writer.send_command(q)
+        # FIXME: replace with self.do_cmd(q) ?
+        # await self.writer.send_command(q)
+        self.writer.write(q)    # write is non-blocking
+        await self.writer.drain()
         code, message = await self.reader.read_reply()
 
         if self.__class__.debug_level > 0:
-            print("DATA: {0}".format(code, message), file=stderr)
+            print("DATA: {} {}".format(code, message), file=stderr)
 
         return code, message
 
@@ -736,9 +748,7 @@ class SMTP:
         if isinstance(msg, str):
             msg = _fix_eols(msg).encode('ascii')
 
-        if self.does_esmtp:
-            # Hmmm? what's this? -ddm
-            # self.esmtp_features['7bit']=""
+        if self.supports_esmtp:
             if "size" in self.esmtp_extensions:
                 esmtp_opts.append("size=%d" % len(msg))
 
@@ -748,7 +758,7 @@ class SMTP:
 
         if code != 250:
             if code == 421:
-                self.close()
+                await self.close()
             else:
                 await self._rset()
 
