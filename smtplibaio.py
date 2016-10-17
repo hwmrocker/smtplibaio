@@ -69,8 +69,8 @@ bCRLF = b"\r\n"
 
 _MAXLINE = 8192  # more than 8 times larger than RFC 821, 4.5.3
 
-OLDSTYLE_AUTH_REGEX = re.compile(r"auth=(?P<auth>.*)", re.I)
-EXTENSION_REGEX = re.compile(r"(?P<feature>[a-z0-9][a-z0-9\-]*) ?", re.I)
+OLDSTYLE_AUTH_REGEX = re.compile(r"auth=(?P<auth>.*)", re.IGNORECASE)
+EXTENSION_REGEX = re.compile(r"(?P<feature>[a-z0-9][a-z0-9\-]*) ?", re.IGNORECASE)
 
 
 def quoteaddr(addrstring):
@@ -93,28 +93,6 @@ def _addr_only(addrstring):
         # parseaddr couldn't parse it, so use it as is.
         return addrstring
     return addr
-
-
-# Legacy method kept for backward compatibility.
-def quotedata(data):
-    """Quote data for email.
-
-    Double leading '.', and change Unix newline '\\n', or Mac '\\r' into
-    Internet CRLF end-of-line.
-    """
-    return re.sub(r'(?m)^\.',
-                  '..',
-                  re.sub(r'(?:\r\n|\n|\r(?!\n))',
-                         CRLF,
-                         data))
-
-
-def _quote_periods(bindata):
-    return re.sub(br'(?m)^\.', b'..', bindata)
-
-
-def _fix_eols(data):
-    return re.sub(r'(?:\r\n|\n|\r(?!\n))', CRLF, data)
 
 
 class SMTP:
@@ -487,9 +465,9 @@ class SMTP:
 
         return code, message
 
-    async def data(self, data):
+    async def data(self, email_message):
         """
-        Send a SMTP 'DATA' command. - Sends message data to the server.
+        Sends a SMTP 'DATA' command. - Transmits the message to the server.
 
         Automatically quotes lines beginning with a period (RFC 821).
 
@@ -510,20 +488,9 @@ class SMTP:
         if code != 354:
             raise SMTPDataRefusedError(code, message)
 
-        # FIXME: following line should probably go into a static method:
-        if isinstance(data, str):
-            data = _fix_eols(data).encode('ascii')
+        email_message = SMTP.prepare_message(email_message)
 
-        q = _quote_periods(data)
-
-        if q[-2:] != bCRLF:
-            q = q + bCRLF
-
-        q = q + b"." + bCRLF
-
-        # FIXME: replace with self.do_cmd(q) ?
-        # await self.writer.send_command(q)
-        self.writer.write(q)    # write is non-blocking
+        self.writer.write(email_message)    # write is non-blocking
         await self.writer.drain()
         code, message = await self.reader.read_reply()
 
@@ -746,7 +713,7 @@ class SMTP:
         esmtp_opts = []
 
         if isinstance(msg, str):
-            msg = _fix_eols(msg).encode('ascii')
+            msg = SMTP.prepare_message(msg)
 
         if self.supports_esmtp:
             if "size" in self.esmtp_extensions:
@@ -935,6 +902,61 @@ class SMTP:
                                   in params.split()])
 
         return extns, auths
+
+    @staticmethod
+    def prepare_message(message):
+        """
+        Returns the given message encoded in ascii with a format suitable for
+        SMTP transmission:
+
+        - Makes sure the message is ASCII encoded ;
+        - Normalizes line endings to '\r\n' ;
+        - Adds a (second) period at the beginning of lines that start
+          with a period ;
+        - Makes sure the message ends with '\r\n.\r\n'.
+
+        See RFC 2821 § 4.1.1.4 and § 4.5.2 for further details.
+        """
+        if isinstance(message, bytes):
+            bytes_message = message
+        else:
+            bytes_message = message.encode('ascii')
+
+        # The original algorithm uses regexes to do this stuff.
+        # This one is -IMHO- more pythonic and it is slightly faster.
+        #
+        # Another version is even faster, but I chose to keep something
+        # more pythonic and readable.
+        # FYI, the fastest way to do all this stuff seems to be
+        # (according to my benchmarks):
+        #
+        # bytes_message.replace(b'\r\n', b'\n') \
+        #              .replace(b'\r', b'\n') \
+        #              .replace(b'\n', b'\r\n')
+        #
+        # DOT_LINE_REGEX = re.compile(rb'^\.', re.MULTILINE)
+        # bytes_message = DOT_LINE_REGEX.sub(b'..', bytes_message)
+        #
+        # if not bytes_message.endswith(b'\r\n'):
+        #     bytes_message += b'\r\n'
+        #
+        # bytes_message += b'\r\n.\r\n'
+
+        lines = []
+
+        for line in bytes_message.splitlines():
+            if line.startswith(b'.'):
+                line = line.replace(b'.', b'..', 1)
+
+            lines.append(line)
+
+        # Recompose the message with <CRLF> only:
+        bytes_message = b'\r\n'.join(lines)
+
+        # Make sure message ends with <CRLF>.<CRLF>:
+        bytes_message += b'\r\n.\r\n'
+
+        return bytes_message
 
 
 class SMTP_SSL(SMTP):
