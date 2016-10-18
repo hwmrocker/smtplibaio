@@ -4,9 +4,6 @@
 """
 SMTP/ESMTP client class.
 
-This should follow RFC 2821 (SMTP), RFC 1869 (ESMTP), RFC 2554 (SMTP
-Authentication) and RFC 2487 (Secure SMTP over TLS).
-
 Example:
 
     async def sendSSL(from_addr, to_addr, msg, mailbox_name, mailbox_pwd):
@@ -14,7 +11,7 @@ Example:
             async with SMTP_SSL() as server:
                 server.login(mailbox_name, mailbox_pwd)
                 server.sendmail(from_addr, to_addr, msg.as_string())
-        except SMTPConnectError as e:
+        except ConnectionError as e:
             print(e, file=sys.stderr)
 
 """
@@ -47,7 +44,6 @@ from email.base64mime import body_encode as encode_base64
 from sys import stderr
 
 from exceptions import (
-    SMTPConnectError,
     SMTPServerDisconnectedError,
     SMTPCommandNotSupportedError,
     SMTPSenderRefusedError,
@@ -61,16 +57,10 @@ from exceptions import (
 from streams import SMTPStreamReader, SMTPStreamWriter
 
 
-SMTP_PORT = 25
-SMTP_SSL_PORT = 465
-
-CRLF = "\r\n"
-bCRLF = b"\r\n"
-
-_MAXLINE = 8192  # more than 8 times larger than RFC 821, 4.5.3
-
-OLDSTYLE_AUTH_REGEX = re.compile(r"auth=(?P<auth>.*)", re.IGNORECASE)
-EXTENSION_REGEX = re.compile(r"(?P<feature>[a-z0-9][a-z0-9\-]*) ?", re.IGNORECASE)
+OLDSTYLE_AUTH_REGEX = re.compile(r"auth=(?P<auth>.*)",
+                                 re.IGNORECASE)
+EXTENSION_REGEX = re.compile(r"(?P<feature>[a-z0-9][a-z0-9\-]*) ?",
+                             re.IGNORECASE)
 
 
 def quoteaddr(addrstring):
@@ -96,52 +86,59 @@ def _addr_only(addrstring):
 
 
 class SMTP:
-    # FIXME: rewrite docstring
     """
-    This class manages a connection to an SMTP or ESMTP server.
-    SMTP Objects:
-        SMTP objects have the following attributes:
-            helo_resp
-                This is the message given by the server in response to the
-                most recent HELO command.
+    SMTP or ESMTP client.
 
-            ehlo_resp
-                This is the message given by the server in response to the
-                most recent EHLO command. This is usually multiline.
+    This should follow RFC 5321 (SMTP), RFC 1869 (ESMTP), RFC 2554 (SMTP
+    Authentication) and RFC 2487 (Secure SMTP over TLS).
 
-            does_esmtp
-                This is a True value _after you do an EHLO command_, if the
-                server supports ESMTP.
+    Attributes:
+        hostname (str): Hostname of the SMTP server we are connecting to.
+        port (int): Port on which the SMTP server listens for connections.
+        timeout (int): Not used.
+        last_helo_response ((int or None, str or None)): A (code, message)
+            2-tuple containing the last *HELO* response.
+        last_ehlo_response ((int or None, str or None)): A (code, message)
+            2-tuple containing the last *EHLO* response.
+        supports_esmtp (bool): True if the server supports ESMTP (set after a
+            *EHLO* command, False otherwise.
+        esmtp_extensions (dict): ESMTP extensions and parameters supported by
+            the SMTP server (set after a *EHLO* command).
+        auth_methods (list of str): Authentication methods supported by the
+            SMTP server.
+        ssl_context (bool): Always False.
+        reader (:class:`streams.SMTPStreamReader`): SMTP stream reader, used to
+            read server responses.
+        writer (:class:`streams.SMTPStreamWriter`): SMTP stream writer, used to
+            send commands to the server.
+        transport (:class:`asyncio.BaseTransport`): Communication channel
+            abstraction between client and server.
+        loop (:class:`asyncio.BaseEventLoop`): Event loop to use.
+        _fqdn (str): Client FQDN. Used to identify the client to the
+            server.
 
-            esmtp_features
-                This is a dictionary, which, if the server supports ESMTP,
-                will _after you do an EHLO command_, contain the names of the
-                SMTP service extensions this server supports, and their
-                parameters (if any).
-
-                Note, all extension names are mapped to lower case in the
-                dictionary.
-
-        See each method's docstrings for details.  In general, there is a
-        method of the same name to perform each SMTP command.  There is also a
-        method called 'sendmail' that will do an entire mail transaction.
-        """
-    _default_port = SMTP_PORT
+    Class Attributes:
+        default_port (int): Default port to use. Defaults to 25.
+        debug_level (int): Level of output. Any value > 0 will make the class
+            print information.
+    """
+    default_port = 25
     debug_level = 0
 
-    def __init__(self, hostname='localhost', port=_default_port, fqdn=None,
+    def __init__(self, hostname='localhost', port=default_port, fqdn=None,
                  timeout=socket._GLOBAL_DEFAULT_TIMEOUT, loop=None):
         """
-        Initializes a new instance.
+        Initializes a new :class:`SMTP` instance.
 
-        FIXME: rewrite docstring
-
-        If specified, `host' is the name of the remote host to which to
-        connect.  If specified, `port' specifies the port to which to connect.
-        By default, smtplibaio.SMTP_PORT is used.
-
-        If a host is specified the connect method is called, and if it returns
-        anything other than a success code an SMTPConnectError is raised.
+        Args:
+            hostname (str): Hostname of the SMTP server to connect to. Defaults
+                to *localhost*.
+            port (int): Port to use to connect to the SMTP server. Defaults
+                to *25*
+            fqdn (str or None): Client Fully Qualified Domain Name. This is used
+                to identify the client to the server. Defaults to None.
+            timeout (int): Not used.
+            loop (:class:`asyncio.BaseEventLoop`): Event loop to use.
         """
         self.hostname = hostname
 
@@ -152,10 +149,9 @@ class SMTP:
 
         self.timeout = timeout
         self._fqdn = fqdn
+        self.loop = loop or asyncio.get_event_loop()
 
         self.reset_state()
-
-        self.loop = loop or asyncio.get_event_loop()
 
     @property
     def fqdn(self):
@@ -163,10 +159,13 @@ class SMTP:
         Returns the string used to identify the client when initiating a SMTP
         session.
 
-        RFC 2821 tells us what to do:
+        RFC 5321 tells us what to do:
 
-        * Use the client FQDN ;
-        * If it isn't available, we SHOULD fall back to an address literal.
+        - Use the client FQDN ;
+        - If it isn't available, we SHOULD fall back to an address literal.
+
+        Returns:
+            str: The value that should be used as the client FQDN.
         """
         if self._fqdn is None:
             # Let's try to retrieve it:
@@ -174,7 +173,7 @@ class SMTP:
 
             if '.' not in self._fqdn:
                 # FQDN doesn't seem to be valid, fall back to address literal,
-                # See RFC 2821 § 4.1.1.1 and § 4.1.3
+                # See RFC 5321 § 4.1.1.1 and § 4.1.3
                 try:
                     info = socket.getaddrinfo(host='localhost',
                                               port=None,
@@ -197,8 +196,8 @@ class SMTP:
         """
         Resets some attributes to their default values.
 
-        This is especially useful when initializing a newly created SMTP
-        instance and when closing an existing SMTP session.
+        This is especially useful when initializing a newly created
+        :class:`SMTP` instance and when closing an existing SMTP session.
 
         It allows us to use the same SMTP instance and connect several times.
         """
@@ -210,15 +209,24 @@ class SMTP:
 
         self.auth_methods = []
 
+        self.ssl_context = False
+
         self.reader = None
         self.writer = None
         self.transport = None
+        self.protocol = None
 
     async def __aenter__(self):
         """
         Enters the asynchronous context manager.
 
         Also tries to connect to the server.
+
+        Raises:
+            SMTPConnectionRefusedError: If the connection between client and
+                SMTP server can not be established.
+
+        .. seealso:: :meth:`SMTP.connect`
         """
         await self.connect()
 
@@ -228,7 +236,9 @@ class SMTP:
         """
         Exits the asynchronous context manager.
 
-        See :py:func:`quit` for further details.
+        Closes the connection and resets instance attributes.
+
+        .. seealso:: :meth:`SMTP.quit`
         """
         await self.quit()
 
@@ -236,13 +246,17 @@ class SMTP:
         """
         Connects to the server.
 
-        We use `asyncio Streams`_.
+        .. note:: This method is automatically invoked by
+            :meth:`SMTP.__aenter__`. The code is mostly borrowed from the
+            :func:`asyncio.streams.open_connection` source code.
 
-        Note: This method is automatically invoked by `__aenter__`.
-              Mostly borrowed from asyncio.streams.open_connection(...)
-              source code.
+        Raises:
+            ConnectionError: If the connection between client and  SMTP server
+                can not be established.
 
-        .. _`asyncio Streams`: https://docs.python.org/3/library/asyncio-stream.html
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
         """
         if self.__class__.debug_level > 0:
             print("Connect: {0}"
@@ -261,14 +275,11 @@ class SMTP:
             'protocol_factory': lambda: protocol,
             'host': self.hostname,
             'port': self.port,
-            'ssl': False
+            'ssl': self.ssl_context
         }
 
-        try:
-            self.transport, _ = await self.loop.create_connection(**conn)
-        except OSError as e:
-            # FIXME: we need a code here !
-            raise SMTPConnectError(e)
+        # This may raise a ConnectionError exception, which we let bubble up.
+        self.transport, _ = await self.loop.create_connection(**conn)
 
         # If the connection has been established, build the writer:
         self.writer = SMTPStreamWriter(self.transport, protocol, self.reader,
@@ -277,31 +288,37 @@ class SMTP:
         try:
             code, message = await self.reader.read_reply()
         except SMTPResponseLineTooLongError as e:
-            raise SMTPConnectError(e.code, e.message)
+            raise ConnectionRefusedError(e.code, e.message)
 
         if self.__class__.debug_level > 0:
             print("Reply: code: {} - msg: {}".format(code, message),
                   file=stderr)
 
         if code != 220:
-            raise SMTPConnectError(code, message)
+            raise ConnectionRefusedError(code, message)
+
+        return code, message
 
     async def do_cmd(self, *args):
         """
         Sends the given command to the server.
 
-        Returns a (code, message) tuple containing the server response.
+        Args:
+            *args: Command and arguments to be sent to the server.
+
+        Raises:
+            FIXME
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
         """
         # FIXME: should we do some check before ?
         if self.__class__.debug_level > 0:
             print("Send: {0}".format(" ".join(args)), file=stderr)
 
         await self.writer.send_command(*args)
-
-        try:
-            code, message = await self.reader.read_reply()
-        except SMTPResponseLineTooLongError as e:
-            raise e
+        code, message = await self.reader.read_reply()
 
         if self.__class__.debug_level > 0:
             print("Reply: code: {} - msg: {}".format(code, message),
@@ -314,11 +331,21 @@ class SMTP:
         Sends a SMTP 'HELO' command. - Identifies the client and starts the
         session.
 
-        If given `from_host` is None, defaults to FQDN.
+        If given ``from_host`` is None, defaults to the client FQDN.
 
-        Raises SMTPHeloRefusedError when the server refuses the connection.
+        For further details, please check out `RFC 5321 § 4.1.1.1`_.
 
-        Returns a (code, message) tuple containing the server response.
+        Args:
+            from_host (str or None): Name to use to identify the client.
+
+        Raises:
+            SMTPHeloRefusedError: If the server refuses the connection.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+
+        .. _`RFC 5321 § 4.1.1.1`: https://tools.ietf.org/html/rfc5321#section-4.1.1.1
         """
         if from_host is None:
             from_host = self.fqdn
@@ -336,11 +363,21 @@ class SMTP:
         Sends a SMTP 'EHLO' command. - Identifies the client and starts the
         session.
 
-        If given `from_host` is None, defaults to FQDN.
+        If given ``from`_host`` is None, defaults to the client FQDN.
 
-        Raises SMTPHeloRefusedError when the server refuses the connection.
+        For further details, please check out `RFC 5321 § 4.1.1.1`_.
 
-        Returns a (code, message) tuple containing the server response.
+        Args:
+            from_host (str or None): Name to use to identify the client.
+
+        Raises:
+            SMTPHeloRefusedError: If the server refuses the connection.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+
+        .. _`RFC 5321 § 4.1.1.1`: https://tools.ietf.org/html/rfc5321#section-4.1.1.1
         """
         if from_host is None:
             from_host = self.fqdn
@@ -358,13 +395,26 @@ class SMTP:
 
         return code, message
 
-    async def help(self, args=''):
+    async def help(self, command_name=None):
         """
         Sends a SMTP 'HELP' command.
 
-        Returns help text as given by the server.
+        For further details please check out `RFC 5321 § 4.1.1.8`_.
+
+        Args:
+            command_name (str or None, optional): Name of a command for which
+                you want help. For example, if you want to get help about the
+                '*RSET*' command, you'd call ``help('RSET')``.
+
+        Returns:
+            Help text as given by the server.
+
+        .. _`RFC 5321 § 4.1.1.8`: https://tools.ietf.org/html/rfc5321#section-4.1.1.8
         """
-        code, message = await self.do_cmd('HELP', args)
+        if command_name is None:
+            command_name = ''
+
+        code, message = await self.do_cmd('HELP', command_name)
 
         return message
 
@@ -372,7 +422,13 @@ class SMTP:
         """
         Sends a SMTP 'RSET' command. - Resets the session.
 
-        Returns a (code, message) tuple containing the server response.
+        For further details, please check out `RFC 5321 § 4.1.1.5`_.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+
+        .. _`RFC 5321 § 4.1.1.5`: https://tools.ietf.org/html/rfc5321#section-4.1.1.5
         """
         return await self.do_cmd('RSET')
 
@@ -395,7 +451,13 @@ class SMTP:
         """
         Sends a SMTP 'NOOP' command. - Doesn't do anything.
 
-        Returns a (code, message) tuple containing the server response.
+        For further details, please check out `RFC 5321 § 4.1.1.9`_.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+
+        .. _`RFC 5321 § 4.1.1.9`: https://tools.ietf.org/html/rfc5321#section-4.1.1.9
         """
         return await self.do_cmd('NOOP')
 
@@ -403,7 +465,16 @@ class SMTP:
         """
         Sends a SMTP 'VRFY' command. - Tests the validity of the given address.
 
-        Returns a (code, message) tuple containing the server response.
+        For further details, please check out `RFC 5321 § 4.1.1.6`_.
+
+        Args:
+            address (str): E-mail address to be checked.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+
+        .. _`RFC 5321 § 4.1.1.6`: https://tools.ietf.org/html/rfc5321#section-4.1.1.6
         """
         return await self.do_cmd('VRFY', _addr_only(address))
 
@@ -411,18 +482,35 @@ class SMTP:
         """
         Sends a SMTP 'EXPN' command. - Expands a mailing-list.
 
-        Returns a (code, message) tuple containing the server response.
+        For further details, please check out `RFC 5321 § 4.1.1.7`_.
+
+        Args:
+            address (str): E-mail address to expand.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+
+        .. _`RFC 5321 § 4.1.1.7`: https://tools.ietf.org/html/rfc5321#section-4.1.1.7
         """
         return await self.do_cmd('EXPN', _addr_only(address))
 
     async def mail(self, sender, options=None):
         """
-        Send a SMTP 'MAIL' command. - Starts the mail transfer session.
+        Sends a SMTP 'MAIL' command. - Starts the mail transfer session.
 
-        Returns a (code, message) tuple containing the server response.
+        For further details, please check out `RFC 5321 § 4.1.1.2`_.
 
-        # FIXME: we should probably raise a SMTPSenderRefusedError in some
-                 cases.
+        Args:
+            sender (str): Sender mailbox (used as reverse-path).
+            options (list of str or None, optional): Additional options to send
+                along with the *MAIL* command.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+
+        .. _`RFC 5321 § 4.1.1.2`: https://tools.ietf.org/html/rfc5321#section-4.1.1.1
         """
         if options is None:
             options = []
@@ -431,23 +519,40 @@ class SMTP:
 
         code, message = await self.do_cmd('MAIL', from_addr, *options)
 
+        # FIXME: we should probably raise a SMTPSenderRefusedError in some
+        #        cases.
+
         return code, message
 
     async def rcpt(self, recipient, options=None):
         """
         Sends a SMTP 'RCPT' command. - Indicates a recipient for the e-mail.
 
-        Returns a (code, message) tuple containing the server response.
+        For further details, please check out `RFC 5321 § 4.1.1.3`_.
 
-        # FIXME: we should probably raise a SMTPRecipientRefusedError in some
-                 cases.
+        Args:
+            recipient (str): E-mail address of one recipient.
+            options (list of str or None, optional): Additional options to send 
+                along with the *RCPT* command.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+
+        .. _`RFC 5321 § 4.1.1.3`: https://tools.ietf.org/html/rfc5321#section-4.1.1.3
         """
         if options is None:
             options = []
 
+        # FIXME: check if options are supported by server.
+        #        only pass supported options.
+
         to_addr = "TO:{}".format(quoteaddr(recipient))
 
         code, message = await self.do_cmd('RCPT', to_addr, *options)
+
+        # FIXME: we should probably raise a SMTPRecipientRefusedError in some
+        #        cases.
 
         return code, message
 
@@ -455,12 +560,17 @@ class SMTP:
         """
         Sends a SMTP 'QUIT' command. - Ends the session.
 
-        Returns a (code, message) tuple containing the server response.
+        For further details, please check out `RFC 5321 § 4.1.1.10`_.
 
-        # FIXME: should we explicitly ignore Exceptions to make sure
-        `close` is called ?
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+
+        .. _`RFC 5321 § 4.1.1.10`: https://tools.ietf.org/html/rfc5321#section-4.1.1.10
         """
         code, message = await self.do_cmd('QUIT')
+        # FIXME: should we explicitely ignore Exceptions to make sure close()
+        #        is called ?
         await self.close()
 
         return code, message
@@ -469,16 +579,27 @@ class SMTP:
         """
         Sends a SMTP 'DATA' command. - Transmits the message to the server.
 
-        Automatically quotes lines beginning with a period (RFC 821).
+        If ``email_message`` is a bytes object, sends it as it is. Else,
+        makes all the required changes so it can be safely trasmitted to the
+        SMTP server.`
 
-        If `data` is a str object, converts lone '\\r' and '\\n' to '\\r\\n'.
-        If `data` is a bytes object, sends it as is.
+        For further details, please check out `RFC 5321 § 4.1.1.4`_.
 
-        Raises SMTPDataRefusedError when the server replies with something
-        unexpected.
+        Args:
+            email_message (str or bytes): Message to be sent.
 
-        Returns a (code, message) tuple containing the last server response
-        (the one it sent after all data were sent by the client).
+        Raises:
+            SMTPDataRefusedError: If the server replies with something
+                unexpected.
+
+         Returns:
+            (int, str): A (code, message) 2-tuple containing the server last
+                response (the one the server sent after all data were sent by
+                the client).
+
+        .. seealso: :meth:`SMTP.prepare_message`
+
+        .. _`RFC 5321 § 4.1.1.4`: https://tools.ietf.org/html/rfc5321#section-4.1.1.4
         """
         code, message = await self.do_cmd('DATA')
 
@@ -490,8 +611,8 @@ class SMTP:
 
         email_message = SMTP.prepare_message(email_message)
 
-        self.writer.write(email_message)    # write is non-blocking
-        await self.writer.drain()
+        self.writer.write(email_message)    # write is non-blocking.
+        await self.writer.drain()           # don't forget to drain.
         code, message = await self.reader.read_reply()
 
         if self.__class__.debug_level > 0:
@@ -499,26 +620,25 @@ class SMTP:
 
         return code, message
 
-    async def login(self, user, password):
-        """Log in on an SMTP server that requires authentication.
+    async def login(self, username, password):
+        """
+        Logs in on an SMTP server that requires authentication.
 
-        The arguments are:
-            - user:     The user name to authenticate with.
-            - password: The password for the authentication.
+        Args:
+            username (str): Username to authenticate with.
+            password (str): Password to use along with the given ``username``.
 
-        If there has been no previous EHLO or HELO command this session, this
-        method tries ESMTP EHLO first.
+        Raises:
+            SMTPHeloRefusedError: If the server didn't reply properly to
+                the EHLO/HELO SMTP greeting.
+            SMTPAuthenticationError: If the server rejects the
+                username/password combination.
+            SMTPException: If there is no suitable authentication method
+                available.
 
-        This method will return normally if the authentication was successful.
-
-        This method may raise the following exceptions:
-
-         SMTPHeloError            The server didn't reply properly to
-                                  the helo greeting.
-         SMTPAuthenticationError  The server didn't accept the username/
-                                  password combination.
-         SMTPException            No suitable authentication method was
-                                  found.
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
         """
         def encode_cram_md5(challenge, user, password):
             challenge = base64.decodebytes(challenge)
@@ -649,17 +769,19 @@ class SMTP:
 
     async def sendmail(self, from_addr, to_addrs, msg, mail_options=[],
                  rcpt_options=[]):
-        """This command performs an entire mail transaction.
+        """
+        Performs an entire e-mail transaction.
 
-        The arguments are:
-            - from_addr    : The address sending this mail.
-            - to_addrs     : A list of addresses to send this mail to.  A bare
-                             string will be treated as a list with 1 address.
-            - msg          : The message to send.
-            - mail_options : List of ESMTP options (such as 8bitmime) for the
-                             mail command.
-            - rcpt_options : List of ESMTP options (such as DSN commands) for
-                             all the rcpt commands.
+        # FIXME: docstring.
+
+        `from_addr` designates the address sending this mail.
+        `to_addrs` is a list of addresses to send this mail to. A bare string
+        will be treated as a list with 1 address.
+        `msg` is the message to send.
+        `mail_options` is a list of ESMTP options (such as '8BITMIME') for the
+        'MAIL' command.
+        `rcpt_options` is a list of ESMTP options (such as 'DSN') for all the
+        'RCPT' commands.
 
         msg may be a string containing characters in the ASCII range, or a byte
         string.  A string is encoded to bytes using the ascii codec, and lone
@@ -690,30 +812,30 @@ class SMTP:
 
         Example:
 
-         >>> import smtplib
-         >>> s=smtplib.SMTP("localhost")
-         >>> tolist=["one@one.org","two@two.org","three@three.org","four@four.org"]
-         >>> msg = '''\\
+         >>> import smtplibaio
+         >>> with smtplibaio.SMTP('localhost') as s:
+         >>>     tolist = ["one@one.org", "two@two.org", "three@three.org"]
+         >>>     msg = '''\\
          ... From: Me@my.org
          ... Subject: testin'...
          ...
          ... This is a test '''
-         >>> s.sendmail("me@my.org",tolist,msg)
+         >>>     s.sendmail("me@my.org", tolist, msg)
          { "three@three.org" : ( 550 ,"User unknown" ) }
-         >>> s.quit()
 
-        In the above example, the message was accepted for delivery to three
-        of the four addresses, and one was rejected, with the error code
-        550.  If all addresses are accepted, then the method will return an
+        In the above example, the message was accepted for delivery to two
+        of the three addresses, and one was rejected, with the error code
+        550.
+
+        If all addresses are accepted, then the method will return an
         empty dictionary.
-
         """
         await self.ehlo_or_helo_if_needed()
 
         esmtp_opts = []
 
-        if isinstance(msg, str):
-            msg = SMTP.prepare_message(msg)
+        # if isinstance(msg, str):
+        #     msg = SMTP.prepare_message(msg)
 
         if self.supports_esmtp:
             if "size" in self.esmtp_extensions:
@@ -878,7 +1000,7 @@ class SMTP:
             match = OLDSTYLE_AUTH_REGEX.match(line)
 
             if match:
-                auth = match.group('auth')[0]
+                auth = match.group("auth")[0]
                 auth = auth.lower().strip()
 
                 if auth not in auths:
@@ -915,12 +1037,16 @@ class SMTP:
           with a period ;
         - Makes sure the message ends with '\r\n.\r\n'.
 
-        See RFC 2821 § 4.1.1.4 and § 4.5.2 for further details.
+        For further details, please check out RFC 5321 `§ 4.1.1.4`_
+        and `§ 4.5.2`_.
+
+        .. _`§ 4.1.1.1`: https://tools.ietf.org/html/rfc5321#section-4.1.1.4
+        .. _`§ 4.5.2`: https://tools.ietf.org/html/rfc5321#section-4.5.2
         """
         if isinstance(message, bytes):
             bytes_message = message
         else:
-            bytes_message = message.encode('ascii')
+            bytes_message = message.encode("ascii")
 
         # The original algorithm uses regexes to do this stuff.
         # This one is -IMHO- more pythonic and it is slightly faster.
@@ -930,31 +1056,31 @@ class SMTP:
         # FYI, the fastest way to do all this stuff seems to be
         # (according to my benchmarks):
         #
-        # bytes_message.replace(b'\r\n', b'\n') \
-        #              .replace(b'\r', b'\n') \
-        #              .replace(b'\n', b'\r\n')
+        # bytes_message.replace(b"\r\n", b"\n") \
+        #              .replace(b"\r", b"\n") \
+        #              .replace(b"\n", b"\r\n")
         #
-        # DOT_LINE_REGEX = re.compile(rb'^\.', re.MULTILINE)
-        # bytes_message = DOT_LINE_REGEX.sub(b'..', bytes_message)
+        # DOT_LINE_REGEX = re.compile(rb"^\.", re.MULTILINE)
+        # bytes_message = DOT_LINE_REGEX.sub(b"..", bytes_message)
         #
-        # if not bytes_message.endswith(b'\r\n'):
-        #     bytes_message += b'\r\n'
+        # if not bytes_message.endswith(b"\r\n"):
+        #     bytes_message += b"\r\n"
         #
-        # bytes_message += b'\r\n.\r\n'
+        # bytes_message += b"\r\n.\r\n"
 
         lines = []
 
         for line in bytes_message.splitlines():
-            if line.startswith(b'.'):
-                line = line.replace(b'.', b'..', 1)
+            if line.startswith(b"."):
+                line = line.replace(b".", b"..", 1)
 
             lines.append(line)
 
         # Recompose the message with <CRLF> only:
-        bytes_message = b'\r\n'.join(lines)
+        bytes_message = b"\r\n".join(lines)
 
         # Make sure message ends with <CRLF>.<CRLF>:
-        bytes_message += b'\r\n.\r\n'
+        bytes_message += b"\r\n.\r\n"
 
         return bytes_message
 
@@ -972,51 +1098,24 @@ class SMTP_SSL(SMTP):
     SSLContext, and is an alternative to keyfile and certfile; If it is
     specified both keyfile and certfile must be None.
     """
-    _default_port = SMTP_SSL_PORT
+    default_port = 465
 
-    def __init__(self, host='localhost', port=_default_port, fqdn=None,
+    def __init__(self, host='localhost', port=default_port, fqdn=None,
                  context=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
         """
-        Initializes a new SMTP_SSL instance.
+        Initializes a new :class:`SMTP_SSL` instance.
+
+        Sets a real SSL context. If given ``context`` is None, tries to
+        create a suitable context.
+
+        .. seealso:: :meth:`SMTP.__init__`
         """
+        super().__init__(host, port, fqdn, timeout)
+
         if context is None:
-            context = ssl.create_default_context(purpose=Purpose.SERVER_AUTH)
+            # By default, this creates a :class:`ssl.SSLContext` instance with
+            # purpose set to ```ssl.Purpose.SERVER_AUTH``, which is what we
+            # want.
+            context = ssl.create_default_context()
 
-        self.context = context
-
-        super().__init__(self, host, port, fqdn, timeout)
-
-    async def connect(self):
-        """
-        Connects to the server.
-
-        We use `asyncio Streams`_.
-
-        Note: This method is automatically invoked by `__aenter__`.
-
-        .. _`asyncio Streams`: https://docs.python.org/3/library/asyncio-stream.html
-        """
-        if self.__class__.debug_level > 0:
-            print("Connect: {0}"
-                  .format((self.hostname, self.port)),
-                  file=stderr)
-
-        connect = asyncio.open_connection(host=self.hostname,
-                                          port=self.port,
-                                          ssl=self.context,
-                                          loop=self.loop)
-
-        try:
-            self.reader, self.writer = await connect
-        except socket.gaierror as e:
-            raise SMTPConnectError(e.errno, e.strerror)
-
-        code, msg = await self.get_reply()
-
-        if self.__class__.debug_level > 0:
-            print("Connect: {0} {1}"
-                  .format(code, msg),
-                  file=stderr)
-
-        if code != 220:
-            raise SMTPConnectError(code, msg)
+        self.ssl_context = context
