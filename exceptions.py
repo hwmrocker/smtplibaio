@@ -23,21 +23,6 @@ class SMTPException(Exception):
         self.message = m
 
 
-class SMTPConnectError(SMTPException):
-    """
-    Raised when an error occurs while trying to connect to the SMTP server.
-    """
-    default_message = "Unable to connect to the server."
-
-
-class SMTPServerDisconnectedError(SMTPException):
-    """
-    Raised when the connection to the SMTP server has been unexpectedly lost
-    or when a command is run without a connection.
-    """
-    default_message = "Connection unexpectedly closed."
-
-
 class SMTPResponseException(SMTPException):
     """
     Base class for all exceptions that include an SMTP error code.
@@ -112,9 +97,9 @@ class SMTPDataRefusedError(SMTPResponseException):
     default_message = "DATA refused by the server."
 
 
-class SMTPHeloRefusedError(SMTPResponseException):
+class SMTPHelloRefusedError(SMTPResponseException):
     """
-    Raised when the server refuses our HELO/EHLO reply.
+    Raised when the server refuses our HELO/EHLO greeting.
     """
     default_message = "HELO or EHLO refused by the server."
 
@@ -124,14 +109,3 @@ class SMTPAuthenticationError(SMTPResponseException):
     Raised when the server rejects our authentication attempt.
     """
     default_message = "Authentication failed."
-
-
-class SMTPResponseLineTooLongError(SMTPResponseException):
-    """
-    Raised when a reply sent by server exceeds the limit set.
-    """
-    def __init__(self):
-        """
-        RFC 2821 tells us this is a code 500 error.
-        """
-        super().__init__(500, "Server response is (way) too long.")

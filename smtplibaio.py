@@ -3,17 +3,6 @@
 
 """
 SMTP/ESMTP client class.
-
-Example:
-
-    async def sendSSL(from_addr, to_addr, msg, mailbox_name, mailbox_pwd):
-        try:
-            async with SMTP_SSL() as server:
-                server.login(mailbox_name, mailbox_pwd)
-                server.sendmail(from_addr, to_addr, msg.as_string())
-        except ConnectionError as e:
-            print(e, file=sys.stderr)
-
 """
 
 # Author: The Dragon De Monsyne <dragondm@integral.org>
@@ -44,15 +33,13 @@ from email.base64mime import body_encode as encode_base64
 from sys import stderr
 
 from exceptions import (
-    SMTPServerDisconnectedError,
     SMTPCommandNotSupportedError,
     SMTPSenderRefusedError,
     SMTPRecipientRefusedError,
     SMTPAllRecipientsRefusedError,
     SMTPDataRefusedError,
-    SMTPHeloRefusedError,
+    SMTPHelloRefusedError,
     SMTPAuthenticationError,
-    SMTPResponseLineTooLongError,
 )
 from streams import SMTPStreamReader, SMTPStreamWriter
 
@@ -106,7 +93,7 @@ class SMTP:
             the SMTP server (set after a *EHLO* command).
         auth_methods (list of str): Authentication methods supported by the
             SMTP server.
-        ssl_context (bool): Always False.
+        ssl_context (bool): Always False. (Used in SMTP_SSL subclass)
         reader (:class:`streams.SMTPStreamReader`): SMTP stream reader, used to
             read server responses.
         writer (:class:`streams.SMTPStreamWriter`): SMTP stream writer, used to
@@ -251,8 +238,8 @@ class SMTP:
             :func:`asyncio.streams.open_connection` source code.
 
         Raises:
-            ConnectionError: If the connection between client and  SMTP server
-                can not be established.
+            ConnectionError subclass: If the connection between client and
+                SMTP server can not be established.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -267,6 +254,7 @@ class SMTP:
         self.reader = SMTPStreamReader(loop=self.loop)
 
         # Then build the protocol:
+        # protocol = SMTPStreamReaderProtocol(self.reader, loop=self.loop)
         protocol = asyncio.StreamReaderProtocol(self.reader, loop=self.loop)
 
         # With the just-built reader and protocol, create the connection and
@@ -285,10 +273,7 @@ class SMTP:
         self.writer = SMTPStreamWriter(self.transport, protocol, self.reader,
                                        self.loop)
 
-        try:
-            code, message = await self.reader.read_reply()
-        except SMTPResponseLineTooLongError as e:
-            raise ConnectionRefusedError(e.code, e.message)
+        code, message = await self.reader.read_reply()
 
         if self.__class__.debug_level > 0:
             print("Reply: code: {} - msg: {}".format(code, message),
@@ -307,13 +292,13 @@ class SMTP:
             *args: Command and arguments to be sent to the server.
 
         Raises:
-            FIXME
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
         """
-        # FIXME: should we do some check before ?
         if self.__class__.debug_level > 0:
             print("Send: {0}".format(" ".join(args)), file=stderr)
 
@@ -339,7 +324,9 @@ class SMTP:
             from_host (str or None): Name to use to identify the client.
 
         Raises:
-            SMTPHeloRefusedError: If the server refuses the connection.
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+            SMTPHelloRefusedError: If the server refuses our HELO greeting.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -354,7 +341,7 @@ class SMTP:
         self.last_helo_response = (code, message)
 
         if code != 250:
-            raise SMTPHeloRefusedError(code, message)
+            raise SMTPHelloRefusedError(code, message)
 
         return code, message
 
@@ -371,7 +358,9 @@ class SMTP:
             from_host (str or None): Name to use to identify the client.
 
         Raises:
-            SMTPHeloRefusedError: If the server refuses the connection.
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+            SMTPHelloRefusedError: If the server refuses our EHLO greeting.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -386,7 +375,7 @@ class SMTP:
         self.last_ehlo_response = (code, message)
 
         if code != 250:
-            raise SMTPHeloRefusedError(code, message)
+            raise SMTPHelloRefusedError(code, message)
 
         extns, auths = SMTP.parse_esmtp_extensions(message)
         self.esmtp_extensions = extns
@@ -406,6 +395,10 @@ class SMTP:
                 you want help. For example, if you want to get help about the
                 '*RSET*' command, you'd call ``help('RSET')``.
 
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+
         Returns:
             Help text as given by the server.
 
@@ -424,6 +417,10 @@ class SMTP:
 
         For further details, please check out `RFC 5321 § 4.1.1.5`_.
 
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
@@ -432,26 +429,15 @@ class SMTP:
         """
         return await self.do_cmd('RSET')
 
-    async def _rset(self):
-        """
-        # FIXME: most probably to be removed.
-
-        Internal 'RSET' command which ignores any SMTPServerDisconnected error.
-
-        Used internally in the library, since the server disconnected error
-        should appear to the application when the *next* command is issued, if
-        we are doing an internal "safety" reset.
-        """
-        try:
-            await self.rset()
-        except SMTPServerDisconnected:
-            pass
-
     async def noop(self):
         """
         Sends a SMTP 'NOOP' command. - Doesn't do anything.
 
         For further details, please check out `RFC 5321 § 4.1.1.9`_.
+
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -470,6 +456,10 @@ class SMTP:
         Args:
             address (str): E-mail address to be checked.
 
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
@@ -486,6 +476,10 @@ class SMTP:
 
         Args:
             address (str): E-mail address to expand.
+
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -506,21 +500,30 @@ class SMTP:
             options (list of str or None, optional): Additional options to send
                 along with the *MAIL* command.
 
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+            SMTPSenderRefusedError: If the server refuses the given sender
+                e-mail address.
+
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
 
-        .. _`RFC 5321 § 4.1.1.2`: https://tools.ietf.org/html/rfc5321#section-4.1.1.1
+        .. _`RFC 5321 § 4.1.1.2`: https://tools.ietf.org/html/rfc5321#section-4.1.1.2
         """
         if options is None:
             options = []
+
+        # FIXME: check if options are supported by server.
+        #        only pass supported options.
 
         from_addr = "FROM:{}".format(quoteaddr(sender))
 
         code, message = await self.do_cmd('MAIL', from_addr, *options)
 
-        # FIXME: we should probably raise a SMTPSenderRefusedError in some
-        #        cases.
+        if code != 250:
+            raise SMTPSenderRefusedError(code, message)
 
         return code, message
 
@@ -534,6 +537,12 @@ class SMTP:
             recipient (str): E-mail address of one recipient.
             options (list of str or None, optional): Additional options to send 
                 along with the *RCPT* command.
+
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+            SMTPRecipientRefusedError: If the server refuses the given
+                recipient e-mail address.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -551,8 +560,8 @@ class SMTP:
 
         code, message = await self.do_cmd('RCPT', to_addr, *options)
 
-        # FIXME: we should probably raise a SMTPRecipientRefusedError in some
-        #        cases.
+        if code != 250:  # FIXME: be more precise.
+            raise SMTPRecipientRefusedError(code, message)
 
         return code, message
 
@@ -564,13 +573,21 @@ class SMTP:
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
-                response.
+                response. If the connection is already closed when calling this
+                method, returns (-1, None).
 
         .. _`RFC 5321 § 4.1.1.10`: https://tools.ietf.org/html/rfc5321#section-4.1.1.10
         """
-        code, message = await self.do_cmd('QUIT')
-        # FIXME: should we explicitely ignore Exceptions to make sure close()
-        #        is called ?
+        code = -1
+        message = None
+
+        try:
+            code, message = await self.do_cmd('QUIT')
+        except ConnectionError:
+            # We voluntarily ignore this kind of exceptions since... the
+            # connection seems already down.
+            pass
+
         await self.close()
 
         return code, message
@@ -589,8 +606,10 @@ class SMTP:
             email_message (str or bytes): Message to be sent.
 
         Raises:
-            SMTPDataRefusedError: If the server replies with something
-                unexpected.
+            SMTPDataRefusedError: If the server refuses to handle the given
+                data.
+            ConnectionError subclass: If the connection to the server is
+                unexpectedely lost.
 
          Returns:
             (int, str): A (code, message) 2-tuple containing the server last
@@ -606,6 +625,7 @@ class SMTP:
         if self.__class__.debug_level > 0:
             print("DATA: {} {}".format(code, message), file=stderr)
 
+        # Check intermediate server reply:
         if code != 354:
             raise SMTPDataRefusedError(code, message)
 
@@ -613,10 +633,14 @@ class SMTP:
 
         self.writer.write(email_message)    # write is non-blocking.
         await self.writer.drain()           # don't forget to drain.
+
         code, message = await self.reader.read_reply()
 
         if self.__class__.debug_level > 0:
-            print("DATA: {} {}".format(code, message), file=stderr)
+            print("DATA: {} {}".format(code, message), file=stderr)
+
+        if code != 250:
+            raise SMTPDataRefusedError(code, message)
 
         return code, message
 
@@ -629,8 +653,10 @@ class SMTP:
             password (str): Password to use along with the given ``username``.
 
         Raises:
-            SMTPHeloRefusedError: If the server didn't reply properly to
-                the EHLO/HELO SMTP greeting.
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+            SMTPHelloRefusedError: If the server refuses our EHLO/HELO
+                greeting.
             SMTPAuthenticationError: If the server rejects the
                 username/password combination.
             SMTPException: If there is no suitable authentication method
@@ -767,124 +793,105 @@ class SMTP:
 
         return (resp, reply)
 
-    async def sendmail(self, from_addr, to_addrs, msg, mail_options=[],
-                 rcpt_options=[]):
+    async def sendmail(self, sender, recipients, message, mail_options=None,
+                       rcpt_options=None):
         """
         Performs an entire e-mail transaction.
 
-        # FIXME: docstring.
-
-        `from_addr` designates the address sending this mail.
-        `to_addrs` is a list of addresses to send this mail to. A bare string
-        will be treated as a list with 1 address.
-        `msg` is the message to send.
-        `mail_options` is a list of ESMTP options (such as '8BITMIME') for the
-        'MAIL' command.
-        `rcpt_options` is a list of ESMTP options (such as 'DSN') for all the
-        'RCPT' commands.
-
-        msg may be a string containing characters in the ASCII range, or a byte
-        string.  A string is encoded to bytes using the ascii codec, and lone
-        \\r and \\n characters are converted to \\r\\n characters.
-
-        If there has been no previous EHLO or HELO command this session, this
-        method tries ESMTP EHLO first.  If the server does ESMTP, message size
-        and each of the specified options will be passed to it.  If EHLO
-        fails, HELO will be tried and ESMTP options suppressed.
-
-        This method will return normally if the mail is accepted for at least
-        one recipient.  It returns a dictionary, with one entry for each
-        recipient that was refused.  Each entry contains a tuple of the SMTP
-        error code and the accompanying error message sent by the server.
-
-        This method may raise the following exceptions:
-
-         SMTPHeloError          The server didn't reply properly to
-                                the helo greeting.
-         SMTPRecipientsRefused  The server rejected ALL recipients
-                                (no mail was sent).
-         SMTPSenderRefused      The server didn't accept the from_addr.
-         SMTPDataError          The server replied with an unexpected
-                                error code (other than a refusal of
-                                a recipient).
-
-        Note: the connection will be open even after an exception is raised.
-
         Example:
 
-         >>> import smtplibaio
-         >>> with smtplibaio.SMTP('localhost') as s:
-         >>>     tolist = ["one@one.org", "two@two.org", "three@three.org"]
-         >>>     msg = '''\\
-         ... From: Me@my.org
-         ... Subject: testin'...
-         ...
-         ... This is a test '''
-         >>>     s.sendmail("me@my.org", tolist, msg)
-         { "three@three.org" : ( 550 ,"User unknown" ) }
+            >>> try:
+            >>>     with SMTP() as client:
+            >>>         try:
+            >>>             r = client.sendmail(sender, recipients, message)
+            >>>         except SMTPException:
+            >>>             print("Error while sending message.")
+            >>>         else:
+            >>>             print("Result: {}.".format(r))
+            >>> except ConnectionError as e:
+            >>>     print(e)
+            Result: {}.
 
-        In the above example, the message was accepted for delivery to two
-        of the three addresses, and one was rejected, with the error code
-        550.
+        Args:
+            sender (str): E-mail address of the sender.
+            recipients (list of str or str): E-mail(s) address(es) of the
+                recipient(s).
+            message (str or bytes): Message body.
+            mail_options (list of str): ESMTP options (such as *8BITMIME*) to
+                send along the *MAIL* command.
+            rcpt_options (list of str): ESMTP options (such as *DSN*) to
+                send along all the *RCPT* commands.
 
-        If all addresses are accepted, then the method will return an
-        empty dictionary.
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+            SMTPHelloRefusedError: If the server refuses our EHLO/HELO
+                greeting.
+            SMTPSenderRefusedError: If the server refuses the given sender
+                e-mail address.
+            SMTPAllRecipientsRefusedError: If the server refuses all given
+                recipients.
+            SMTPDataRefusedError: If the server refuses to handle the given
+                message.
+
+        Returns:
+            dict: A dict containing an entry for each recipient that was
+                refused. Each entry is associated with  a (code, message)
+                2-tuple containing the error code and message, as returned by
+                the server.
+
+                When everythign runs smoothly, the returning dict is empty.
+
+        .. note:: The connection remains open after. It's your responsibility
+            to close it. A good practice is to use the asynchronous context
+            manager instead. See :meth:`SMTP.__aenter__` for further details.
         """
+        # Make sure `recipients` is a list:
+        if isinstance(recipients, str):
+            recipients = [recipients]
+
+        # Set some defaults values:
+        if mail_options is None:
+            mail_options = []
+
+        if rcpt_options is None:
+            rcpt_options = []
+
+        # EHLO or HELO is required:
         await self.ehlo_or_helo_if_needed()
-
-        esmtp_opts = []
-
-        # if isinstance(msg, str):
-        #     msg = SMTP.prepare_message(msg)
 
         if self.supports_esmtp:
             if "size" in self.esmtp_extensions:
-                esmtp_opts.append("size=%d" % len(msg))
+                mail_options.append("size={}".format(len(message)))
 
-            esmtp_opts.extend(mail_options)
+        # This may raise an SMTPSenderRefusedError:
+        await self.mail(sender, mail_options)
 
-        code, resp = await self.mail(from_addr, esmtp_opts)
+        errors = {}
 
-        if code != 250:
-            if code == 421:
-                await self.close()
-            else:
-                await self._rset()
+        for recipient in recipients:
+            try:
+                await self.rcpt(recipient, rcpt_options)
+            except SMTPRecipientRefusedError as e:
+                errors[recipient] = (e.code, e.message)
 
-            raise SMTPSenderRefusedError(from_addr, code, resp)
+        if len(recipients) == len(errors):
+            # The server refused all our recipients:
+            raise SMTPAllRecipientsRefusedError(errors)
 
-        senderrs = {}
+        # This may raise an SMTPDataRefusedError:
+        await self.data(message)
 
-        if isinstance(to_addrs, str):
-            to_addrs = [to_addrs]
+        # If we got here then somebody got our mail:
+        return errors
 
-        for each in to_addrs:
-            code, resp = await self.rcpt(each, rcpt_options)
-
-            if (code != 250) and (code != 251):
-                senderrs[each] = (code, resp)
-
-            if code == 421:
-                self.close()
-                raise SMTPAllRecipientsRefusedError(senderrs)
-
-        if len(senderrs) == len(to_addrs):
-            # the server refused all our recipients
-            await self._rset()
-            raise SMTPAllRecipientsRefusedError(senderrs)
-
-        code, resp = await self.data(msg)
-
-        if code != 250:
-            if code == 421:
-                self.close()
-            else:
-                await self._rset()
-
-            raise SMTPDataRefusedError(code, resp)
-
-        # if we got here then somebody got our mail
-        return senderrs
+    async def send_mail(self, sender, recipients, message, mail_options=None,
+                        rcpt_options=None):
+        """
+        Alias for :meth:`SMTP.sendmail`.
+        """
+        return await self.sendmail(sender, recipients, message,
+                                   mail_options, rcpt_options)
 
     async def send_message(self, msg, from_addr=None, to_addrs=None,
                      mail_options=[], rcpt_options={}):
@@ -945,13 +952,16 @@ class SMTP:
 
     async def ehlo_or_helo_if_needed(self):
         """
-        Calls `ehlo()` and/or `helo()` if needed.
+        Calls :meth:`SMTP.ehlo` and/or :meth:`SMTP.helo` if needed.
 
-        If there hasn't been any previous EHLO or HELO command this session,
-        tries to initiate the session. ESMTP EHLO is tried first.
+        If there hasn't been any previous *EHLO* or *HELO* command this session,
+        tries to initiate the session. *EHLO* is tried first.
 
-        Raises SMTPHeloRefusedError when the server doesn't reply properly to
-        neither of EHLO and HELO commands.
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+            SMTPHelloRefusedError: If the server refuses our EHLO/HELO
+                greeting.
         """
         no_helo = self.last_helo_response == (None, None)
         no_ehlo = self.last_ehlo_response == (None, None)
@@ -960,7 +970,7 @@ class SMTP:
             try:
                 # First we try EHLO:
                 await self.ehlo()
-            except SMTPHeloRefusedError:
+            except ConnectionRefusedError:
                 # EHLO failed, let's try HELO:
                 await self.helo()
 
@@ -970,6 +980,7 @@ class SMTP:
         (voluntarily or not).
         """
         if self.writer is not None:
+            # Close the transport:
             self.writer.close()
 
         self.reset_state()
@@ -977,13 +988,23 @@ class SMTP:
     @classmethod
     def set_debuglevel(cls, debuglevel):
         """
-        Set the debug output level.
+        Sets the debug output level to ``debuglevel``.
         """
         cls.debug_level = debuglevel
 
     @staticmethod
     def parse_esmtp_extensions(message):
         """
+        Parses the response given by an ESMTP server after a *EHLO* command.
+
+        The response is parsed to build:
+
+        - A dict of supported ESMTP extensions (with parameters, if any).
+        - A list of supported authentication methods.
+
+        Returns:
+            (dict, list): A (extensions, auth_methods) 2-tuple containing the
+                supported extensions and authentication methods.
         """
         extns = {}
         auths = []
@@ -992,11 +1013,7 @@ class SMTP:
 
         for line in lines[1:]:
             # To be able to communicate with as many SMTP servers as possible,
-            # we have to take the old-style auth advertisement into account,
-            # because:
-            # 1. Else our SMTP feature parser gets confused.
-            # 2. There are some servers that only advertise the auth methods we
-            #    support using the old style.
+            # we have to take the old-style auth advertisement into account.
             match = OLDSTYLE_AUTH_REGEX.match(line)
 
             if match:
@@ -1006,7 +1023,7 @@ class SMTP:
                 if auth not in auths:
                     auths.append(auth)
 
-            # RFC 1869 requires a space between ehlo keyword and parameters.
+            # RFC 1869 requires a space between EHLO keyword and parameters.
             # It's actually stricter, in that only spaces are allowed between
             # parameters, but were not going to check for that here.
             # Note that the space isn't present if there are no parameters.
@@ -1087,16 +1104,13 @@ class SMTP:
 
 class SMTP_SSL(SMTP):
     """
-    This is a subclass derived from SMTP that connects over an SSL
-    encrypted socket (to use this class you need a socket module that was
-    compiled with SSL support). If host is not specified, '' (the local
-    host) is used. If port is omitted, the standard SMTP-over-SSL port
-    (465) is used.  local_hostname and source_address have the same meaning
-    as they do in the SMTP class.  keyfile and certfile are also optional -
-    they can contain a PEM formatted private key and certificate chain file
-    for the SSL connection. context also optional, can contain a
-    SSLContext, and is an alternative to keyfile and certfile; If it is
-    specified both keyfile and certfile must be None.
+    SMTP or ESMTP client over an SSL channel.
+
+    Attributes:
+        ssl_context (:class:`ssl.SSLContext`): SSL context to use to establish
+            the connection with the SMTP server.
+
+    .. seealso: :class:`SMTP`
     """
     default_port = 465
 
@@ -1107,6 +1121,8 @@ class SMTP_SSL(SMTP):
 
         Sets a real SSL context. If given ``context`` is None, tries to
         create a suitable context.
+
+        Also default port in this case is *465*.
 
         .. seealso:: :meth:`SMTP.__init__`
         """

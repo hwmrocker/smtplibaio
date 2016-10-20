@@ -4,11 +4,6 @@
 
 from asyncio import StreamReader, StreamWriter
 
-from exceptions import (
-    SMTPServerDisconnectedError,
-    SMTPResponseLineTooLongError
-)
-
 
 class SMTPStreamReader(StreamReader):
     """
@@ -27,17 +22,20 @@ class SMTPStreamReader(StreamReader):
         """
         Reads a reply from the server.
 
-        Raises SMTPServerDisconnectedError if EOF is reached.
+        Raises:
+            ConnectionResetError: If the connection with the server is lost
+                (we can't read any response anymore). Or if the server
+                replies without a proper return code.
 
-        Returns a (code, full_message) tuple consisting of:
+        Returns:
+            (int, str): A (code, full_message) 2-tuple consisting of:
 
-        * server response code (or -1 if the code can't be read from server) ;
-        * server response string corresponding to response code (multiline
-          responses are converted to a single, multiline string).
+                - server response code ;
+                - server response string corresponding to response code
+                  (multiline responses are returned in a single string).
         """
-        code = -1
+        code = 500
         messages = []
-
         go_on = True
 
         while go_on:
@@ -46,20 +44,22 @@ class SMTPStreamReader(StreamReader):
             except ValueError as e:
                 # ValueError is raised when limit is reached before we could
                 # get an entire line.
-                raise SMTPResponseLineTooLongError()
-
-            # FIXME: what should we do when getting an empty line ?
-            # if not line:
-            #     ...
-
-            try:
-                code = int(line[:3])
-            except ValueError:
-                code = -1
+                # We return what we got with a 500 code and we stop to read
+                # the reply to avoid being flooded.
+                code = 500
                 go_on = False
             else:
-                # Check is we have a multiline response:
-                go_on = (line[3:4] == b'-')
+                try:
+                    code = int(line[:3])
+                except ValueError as e:
+                    # We either:
+                    # - Got an empty line (connection is probably down),
+                    # - Got a line without a valid return code.
+                    # In both case, it shouldn't happen, hence:
+                    raise ConnectionResetError('Connection lost.') from e
+                else:
+                    # Check is we have a multiline response:
+                    go_on = (line[3:4] == b'-')
 
             message = line[4:].strip(b' \t\r\n').decode('ascii')
             messages.append(message)
@@ -72,17 +72,13 @@ class SMTPStreamReader(StreamReader):
 class SMTPStreamWriter(StreamWriter):
     """
     """
-    def __init__(self, transport, protocol, reader, loop):
-        """
-        Initializes a new SMTPStreamWriter instance.
-        """
-        super().__init__(transport, protocol, reader, loop)
-
     async def send_command(self, *args):
         """
         Sends the given command (and parameters, if any) to the server.
-        
-        Raises ConnectionResetError when the connection is lost.
+
+        Raises:
+            ConnectionResetError: If the connection with the server is lost.
+            (Shouldn't it raise BrokenPipeError too ?)
         """
         command = "{}\r\n".format(" ".join(args)).encode('ascii')
 
