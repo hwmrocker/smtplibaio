@@ -18,15 +18,13 @@ SMTP/ESMTP client class.
 # This was modified form the Python 3.4 library smtplib.
 
 import asyncio
-import socket
-import io
-import re
+import base64
 import email.utils
 import email.message
 import email.generator
-import base64
 import hmac
-import copy
+import re
+import socket
 import ssl
 
 from email.base64mime import body_encode as encode_base64
@@ -41,7 +39,10 @@ from exceptions import (
     SMTPHelloRefusedError,
     SMTPAuthenticationError,
 )
-from streams import SMTPStreamReader, SMTPStreamWriter
+from streams import (
+    SMTPStreamReader,
+    SMTPStreamWriter,
+)
 
 
 OLDSTYLE_AUTH_REGEX = re.compile(r"auth=(?P<auth>.*)",
@@ -146,21 +147,22 @@ class SMTP:
         Returns the string used to identify the client when initiating a SMTP
         session.
 
-        RFC 5321 tells us what to do:
+        RFC 5321 `§ 4.1.1.1`_ and `§ 4.1.3`_ tell us what to do:
 
         - Use the client FQDN ;
         - If it isn't available, we SHOULD fall back to an address literal.
 
         Returns:
             str: The value that should be used as the client FQDN.
+
+        .. _`§ 4.1.1.1`: https://tools.ietf.org/html/rfc5321#section-4.1.1.1
+        .. _`§ 4.1.3`: https//tools.ietf.org/html/rfc5321#section-4.1.3
         """
         if self._fqdn is None:
             # Let's try to retrieve it:
             self._fqdn = socket.getfqdn()
 
             if '.' not in self._fqdn:
-                # FQDN doesn't seem to be valid, fall back to address literal,
-                # See RFC 5321 § 4.1.1.1 and § 4.1.3
                 try:
                     info = socket.getaddrinfo(host='localhost',
                                               port=None,
@@ -535,7 +537,7 @@ class SMTP:
 
         Args:
             recipient (str): E-mail address of one recipient.
-            options (list of str or None, optional): Additional options to send 
+            options (list of str or None, optional): Additional options to send
                 along with the *RCPT* command.
 
         Raises:
@@ -892,63 +894,6 @@ class SMTP:
         """
         return await self.sendmail(sender, recipients, message,
                                    mail_options, rcpt_options)
-
-    async def send_message(self, msg, from_addr=None, to_addrs=None,
-                     mail_options=[], rcpt_options={}):
-        """Converts message to a bytestring and passes it to sendmail.
-
-        The arguments are as for sendmail, except that msg is an
-        email.message.Message object.  If from_addr is None or to_addrs is
-        None, these arguments are taken from the headers of the Message as
-        described in RFC 2822 (a ValueError is raised if there is more than
-        one set of 'Resent-' headers).  Regardless of the values of from_addr and
-        to_addr, any Bcc field (or Resent-Bcc field, when the Message is a
-        resent) of the Message object won't be transmitted.  The Message
-        object is then serialized using email.generator.BytesGenerator and
-        sendmail is called to transmit the message.
-
-        """
-        # 'Resent-Date' is a mandatory field if the Message is resent (RFC 2822
-        # Section 3.6.6). In such a case, we use the 'Resent-*' fields.  However,
-        # if there is more than one 'Resent-' block there's no way to
-        # unambiguously determine which one is the most recent in all cases,
-        # so rather than guess we raise a ValueError in that case.
-        #
-        # TODO implement heuristics to guess the correct Resent-* block with an
-        # option allowing the user to enable the heuristics.  (It should be
-        # possible to guess correctly almost all of the time.)
-
-        resent = msg.get_all('Resent-Date')
-        if resent is None:
-            header_prefix = ''
-        elif len(resent) == 1:
-            header_prefix = 'Resent-'
-        else:
-            raise ValueError("message has more than one 'Resent-' header block")
-
-        if from_addr is None:
-            # Prefer the sender field per RFC 2822:3.6.2.
-            from_addr = (msg[header_prefix + 'Sender']
-                         if (header_prefix + 'Sender') in msg
-                         else msg[header_prefix + 'From'])
-
-        if to_addrs is None:
-            addr_fields = [f for f in (msg[header_prefix + 'To'],
-                                       msg[header_prefix + 'Bcc'],
-                                       msg[header_prefix + 'Cc']) if f is not None]
-            to_addrs = [a[1] for a in email.utils.getaddresses(addr_fields)]
-        # Make a local copy so we can delete the bcc headers.
-        msg_copy = copy.copy(msg)
-        del msg_copy['Bcc']
-        del msg_copy['Resent-Bcc']
-
-        with io.BytesIO() as bytesmsg:
-            g = email.generator.BytesGenerator(bytesmsg)
-            g.flatten(msg_copy, linesep='\r\n')
-            flatmsg = bytesmsg.getvalue()
-
-        return (await self.sendmail(from_addr, to_addrs, flatmsg,
-                                         mail_options, rcpt_options))
 
     async def ehlo_or_helo_if_needed(self):
         """
