@@ -106,25 +106,23 @@ class SMTP:
             server.
 
     Class Attributes:
-        default_port (int): Default port to use. Defaults to 25.
-        debug_level (int): Level of output. Any value > 0 will make the class
-            print information.
+        _default_port (int): Default port to use. Defaults to 25.
+        _debug (bool): Debug mode. A value of True will make the class
+            print more information.
     """
-    default_port = 25
-    debug_level = 0
+    _default_port = 25
+    _debug = False
 
-    def __init__(self, hostname='localhost', port=default_port, fqdn=None,
+    def __init__(self, hostname='localhost', port=_default_port, fqdn=None,
                  timeout=socket._GLOBAL_DEFAULT_TIMEOUT, loop=None):
         """
         Initializes a new :class:`SMTP` instance.
 
         Args:
-            hostname (str): Hostname of the SMTP server to connect to. Defaults
-                to *localhost*.
-            port (int): Port to use to connect to the SMTP server. Defaults
-                to *25*
+            hostname (str): Hostname of the SMTP server to connect to.
+            port (int): Port to use to connect to the SMTP server.
             fqdn (str or None): Client Fully Qualified Domain Name. This is used
-                to identify the client to the server. Defaults to None.
+                to identify the client to the server..
             timeout (int): Not used.
             loop (:class:`asyncio.BaseEventLoop`): Event loop to use.
         """
@@ -176,7 +174,7 @@ class SMTP:
 
                 self._fqdn = "[{}]".format(addr)
 
-        if self.__class__.debug_level > 0:
+        if self.__class__._debug:
             print("FQDN: {0}".format(self._fqdn), file=stderr)
 
         return self._fqdn
@@ -203,7 +201,6 @@ class SMTP:
         self.reader = None
         self.writer = None
         self.transport = None
-        self.protocol = None
 
     async def __aenter__(self):
         """
@@ -247,7 +244,7 @@ class SMTP:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
         """
-        if self.__class__.debug_level > 0:
+        if self.__class__._debug:
             print("Connect: {0}"
                   .format((self.hostname, self.port)),
                   file=stderr)
@@ -256,7 +253,6 @@ class SMTP:
         self.reader = SMTPStreamReader(loop=self.loop)
 
         # Then build the protocol:
-        # protocol = SMTPStreamReaderProtocol(self.reader, loop=self.loop)
         protocol = asyncio.StreamReaderProtocol(self.reader, loop=self.loop)
 
         # With the just-built reader and protocol, create the connection and
@@ -277,7 +273,7 @@ class SMTP:
 
         code, message = await self.reader.read_reply()
 
-        if self.__class__.debug_level > 0:
+        if self.__class__._debug:
             print("Reply: code: {} - msg: {}".format(code, message),
                   file=stderr)
 
@@ -301,13 +297,13 @@ class SMTP:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
         """
-        if self.__class__.debug_level > 0:
+        if self.__class__._debug:
             print("Send: {0}".format(" ".join(args)), file=stderr)
 
         await self.writer.send_command(*args)
         code, message = await self.reader.read_reply()
 
-        if self.__class__.debug_level > 0:
+        if self.__class__._debug:
             print("Reply: code: {} - msg: {}".format(code, message),
                   file=stderr)
 
@@ -624,7 +620,7 @@ class SMTP:
         """
         code, message = await self.do_cmd('DATA')
 
-        if self.__class__.debug_level > 0:
+        if self.__class__._debug:
             print("DATA: {} {}".format(code, message), file=stderr)
 
         # Check intermediate server reply:
@@ -638,7 +634,7 @@ class SMTP:
 
         code, message = await self.reader.read_reply()
 
-        if self.__class__.debug_level > 0:
+        if self.__class__._debug:
             print("DATA: {} {}".format(code, message), file=stderr)
 
         if code != 250:
@@ -739,61 +735,67 @@ class SMTP:
         # We could not login sucessfully. Return result of last attempt.
         raise SMTPAuthenticationError(code, resp)
 
-    async def starttls(self, keyfile=None, certfile=None, context=None):
-        """Puts the connection to the SMTP server into TLS mode.
+    async def starttls(self, context=None):
+        """
+        Upgrades the connection to the SMTP server into TLS mode.
 
         If there has been no previous EHLO or HELO command this session, this
         method tries ESMTP EHLO first.
 
-        If the server supports TLS, this will encrypt the rest of the SMTP
-        session. If you provide the keyfile and certfile parameters,
-        the identity of the SMTP server and client can be checked. This,
-        however, depends on whether the socket module really checks the
-        certificates.
+        If the server supports SSL/TLS, this will encrypt the rest of the SMTP
+        session.
 
-        This method may raise the following exceptions:
+        .. warning: This method isn't available for now. Please see
+            `issue 23749` for further details.
 
-         SMTPHeloError            The server didn't reply properly to
-                                  the helo greeting.
+        .. _`issue 23749`: https://bugs.python.org/issue23749
+
+        Args:
+            context (:obj:`ssl.SSLContext`):
+
+        Raises:
+            NotImplementedError: Always.
+
+        Returns:
+            (int, message): A (code, message) 2-tuple containing the server
+                response.
         """
-        await self.ehlo_or_helo_if_needed()
+        # await self.ehlo_or_helo_if_needed()
 
-        if "starttls" not in self.esmtp_extensions:
-            err = "STARTTLS extension not supported."
-            raise SMTPCommandNotSupportedError(err)
+        # if "starttls" not in self.esmtp_extensions:
+        #     raise SMTPCommandNotSupportedError("STARTTLS not supported.")
 
-        resp, reply = await self.do_cmd("STARTTLS")
+        # code, message = await self.do_cmd("STARTTLS")
 
-        if resp == 220:
-            if not _have_ssl:
-                raise RuntimeError("No SSL support included in this Python")
+        # if code == 220:
+        #     if context is None:
+        #         context = ssl._create_stdlib_context()
 
-            if context is not None and keyfile is not None:
-                raise ValueError("context and keyfile arguments are mutually "
-                                 "exclusive")
+            # # Upgrade reader and writer:
+            # FIXME: Waiting for a public API to be available.
+            # See https://bugs.python.org/issue23749 for further details.
+            # ...
+            # ...
 
-            if context is not None and certfile is not None:
-                raise ValueError("context and certfile arguments are mutually "
-                                 "exclusive")
-
-            if context is None:
-                context = ssl._create_stdlib_context(certfile=certfile,
-                                                     keyfile=keyfile)
-
-            self.sock = context.wrap_socket(self.sock,
-                                            server_hostname=self._host)
-
-            self.file = None
             # RFC 3207:
             # The client MUST discard any knowledge obtained from
             # the server, such as the list of SMTP service extensions,
             # which was not obtained from the TLS negotiation itself.
-            self.helo_resp = None
-            self.ehlo_resp = None
-            self.esmtp_features = {}
-            self.does_esmtp = 0
+            #
+            # FIXME: wouldn't it be better to use reset_state here ?
+            # And reset self.reader, self.writer and self.transport just after
+            # Maybe also self.ssl_context ?
+            # self.last_ehlo_response = (None, None)
+            # self.last_helo_response = (None, None)
+            # self.supports_esmtp = False
+            # self.esmtp_extensions = {}
+            # self.auth_methods = []
+        # else:
+        #     raise...
 
-        return (resp, reply)
+        # return (code, message)
+        raise NotImplementedError()
+
 
     async def sendmail(self, sender, recipients, message, mail_options=None,
                        rcpt_options=None):
@@ -931,11 +933,14 @@ class SMTP:
         self.reset_state()
 
     @classmethod
-    def set_debuglevel(cls, debuglevel):
+    def set_debug(cls, debug):
         """
-        Sets the debug output level to ``debuglevel``.
+        Sets the debug option.
+
+        Args:
+            debug (bool): True to set the class in debug mode.
         """
-        cls.debug_level = debuglevel
+        cls._debug = debug
 
     @staticmethod
     def parse_esmtp_extensions(message):
@@ -1057,9 +1062,9 @@ class SMTP_SSL(SMTP):
 
     .. seealso: :class:`SMTP`
     """
-    default_port = 465
+    _default_port = 465
 
-    def __init__(self, host='localhost', port=default_port, fqdn=None,
+    def __init__(self, host='localhost', port=_default_port, fqdn=None,
                  context=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
         """
         Initializes a new :class:`SMTP_SSL` instance.
