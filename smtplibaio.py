@@ -22,7 +22,6 @@ import base64
 import email.utils
 import email.message
 import email.generator
-import hashlib
 import hmac
 import re
 import socket
@@ -95,10 +94,10 @@ class SMTP:
         auth_mechanisms (list of str): Authentication mechanisms supported by
             the SMTP server.
         ssl_context (bool): Always False. (Used in SMTP_SSL subclass)
-        reader (:class:`streams.SMTPStreamReader`): SMTP stream reader, used to
-            read server responses.
-        writer (:class:`streams.SMTPStreamWriter`): SMTP stream writer, used to
-            send commands to the server.
+        reader (:class:`streams.SMTPStreamReader`): SMTP stream reader, used
+            to read server responses.
+        writer (:class:`streams.SMTPStreamWriter`): SMTP stream writer, used
+            to send commands to the server.
         transport (:class:`asyncio.BaseTransport`): Communication channel
             abstraction between client and server.
         loop (:class:`asyncio.BaseEventLoop`): Event loop to use.
@@ -135,8 +134,8 @@ class SMTP:
         Args:
             hostname (str): Hostname of the SMTP server to connect to.
             port (int): Port to use to connect to the SMTP server.
-            fqdn (str or None): Client Fully Qualified Domain Name. This is used
-                to identify the client to the server..
+            fqdn (str or None): Client Fully Qualified Domain Name. This is
+                used to identify the client to the server.
             timeout (int): Not used.
             loop (:class:`asyncio.BaseEventLoop`): Event loop to use.
         """
@@ -778,25 +777,25 @@ class SMTP:
         #     if context is None:
         #         context = ssl._create_stdlib_context()
 
-            # # Upgrade reader and writer:
-            # FIXME: Waiting for a public API to be available.
-            # See https://bugs.python.org/issue23749 for further details.
-            # ...
-            # ...
+        #     # Upgrade reader and writer:
+        #     FIXME: Waiting for a public API to be available.
+        #     See https://bugs.python.org/issue23749 for further details.
+        #     ...
+        #     ...
 
-            # RFC 3207:
-            # The client MUST discard any knowledge obtained from
-            # the server, such as the list of SMTP service extensions,
-            # which was not obtained from the TLS negotiation itself.
-            #
-            # FIXME: wouldn't it be better to use reset_state here ?
-            # And reset self.reader, self.writer and self.transport just after
-            # Maybe also self.ssl_context ?
-            # self.last_ehlo_response = (None, None)
-            # self.last_helo_response = (None, None)
-            # self.supports_esmtp = False
-            # self.esmtp_extensions = {}
-            # self.auth_mechanisms = []
+        #     # RFC 3207:
+        #     # The client MUST discard any knowledge obtained from
+        #     # the server, such as the list of SMTP service extensions,
+        #     # which was not obtained from the TLS negotiation itself.
+        #
+        #     FIXME: wouldn't it be better to use reset_state here ?
+        #     And reset self.reader, self.writer and self.transport just after
+        #     Maybe also self.ssl_context ?
+        #     self.last_ehlo_response = (None, None)
+        #     self.last_helo_response = (None, None)
+        #     self.supports_esmtp = False
+        #     self.esmtp_extensions = {}
+        #     self.auth_mechanisms = []
         # else:
         #     raise...
 
@@ -907,8 +906,8 @@ class SMTP:
         """
         Calls :meth:`SMTP.ehlo` and/or :meth:`SMTP.helo` if needed.
 
-        If there hasn't been any previous *EHLO* or *HELO* command this session,
-        tries to initiate the session. *EHLO* is tried first.
+        If there hasn't been any previous *EHLO* or *HELO* command this
+        session, tries to initiate the session. *EHLO* is tried first.
 
         Raises:
             ConnectionResetError: If the connection with the server is
@@ -959,8 +958,8 @@ class SMTP:
         - A list of supported authentication methods.
 
         Returns:
-            (dict, list): A (extensions, auth_mechanisms) 2-tuple containing the
-                supported extensions and authentication methods.
+            (dict, list): A (extensions, auth_mechanisms) 2-tuple containing
+                the supported extensions and authentication methods.
         """
         extns = {}
         auths = []
@@ -1222,6 +1221,7 @@ class SMTP:
             str: A base64-decoded string.
         """
         return base64.b64decode(b).decode('ascii')
+
 
 class SMTP_SSL(SMTP):
     """
