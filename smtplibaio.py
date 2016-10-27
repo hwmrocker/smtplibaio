@@ -19,9 +19,6 @@ SMTP/ESMTP client class.
 
 import asyncio
 import base64
-import email.utils
-import email.message
-import email.generator
 import hmac
 import re
 import socket
@@ -46,30 +43,9 @@ from streams import (
 
 OLDSTYLE_AUTH_REGEX = re.compile(r"auth=(?P<auth>.*)",
                                  re.IGNORECASE)
+
 EXTENSION_REGEX = re.compile(r"(?P<feature>[a-z0-9][a-z0-9\-]*) ?",
                              re.IGNORECASE)
-
-
-def quoteaddr(addrstring):
-    """Quote a subset of the email addresses defined by RFC 821.
-
-    Should be able to handle anything email.utils.parseaddr can handle.
-    """
-    displayname, addr = email.utils.parseaddr(addrstring)
-    if (displayname, addr) == ('', ''):
-        # parseaddr couldn't parse it, use it as is and hope for the best.
-        if addrstring.strip().startswith('<'):
-            return addrstring
-        return "<%s>" % addrstring
-    return "<%s>" % addr
-
-
-def _addr_only(addrstring):
-    displayname, addr = email.utils.parseaddr(addrstring)
-    if (displayname, addr) == ('', ''):
-        # parseaddr couldn't parse it, so use it as is.
-        return addrstring
-    return addr
 
 
 class SMTP:
@@ -481,7 +457,7 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.6`: https://tools.ietf.org/html/rfc5321#section-4.1.1.6
         """
-        return await self.do_cmd('VRFY', _addr_only(address))
+        return await self.do_cmd('VRFY', address)
 
     async def expn(self, address):
         """
@@ -502,7 +478,7 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.7`: https://tools.ietf.org/html/rfc5321#section-4.1.1.7
         """
-        return await self.do_cmd('EXPN', _addr_only(address))
+        return await self.do_cmd('EXPN', address)
 
     async def mail(self, sender, options=None):
         """
@@ -533,7 +509,9 @@ class SMTP:
         # FIXME: check if options are supported by server.
         #        only pass supported options.
 
-        from_addr = "FROM:{}".format(quoteaddr(sender))
+        # RFC is not really precise about the format, but this seems to give
+        # good results:
+        from_addr = "FROM:<{}>".format(sender)
 
         code, message = await self.do_cmd('MAIL', from_addr, *options)
 
@@ -571,7 +549,9 @@ class SMTP:
         # FIXME: check if options are supported by server.
         #        only pass supported options.
 
-        to_addr = "TO:{}".format(quoteaddr(recipient))
+        # RFC is not really precise about the format, but this seems to give
+        # good results:
+        to_addr = "TO:<{}>".format(recipient)
 
         code, message = await self.do_cmd('RCPT', to_addr, *options)
 
