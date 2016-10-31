@@ -41,13 +41,6 @@ from streams import (
 )
 
 
-OLDSTYLE_AUTH_REGEX = re.compile(r"auth=(?P<auth>.*)",
-                                 re.IGNORECASE)
-
-EXTENSION_REGEX = re.compile(r"(?P<feature>[a-z0-9][a-z0-9\-]*) ?",
-                             re.IGNORECASE)
-
-
 class SMTP:
     """
     SMTP or ESMTP client.
@@ -484,7 +477,8 @@ class SMTP:
         """
         Sends a SMTP 'MAIL' command. - Starts the mail transfer session.
 
-        For further details, please check out `RFC 5321 § 4.1.1.2`_.
+        For further details, please check out `RFC 5321 § 4.1.1.2`_ and
+        `§ 3.3`_.
 
         Args:
             sender (str): Sender mailbox (used as reverse-path).
@@ -502,17 +496,12 @@ class SMTP:
                 response.
 
         .. _`RFC 5321 § 4.1.1.2`: https://tools.ietf.org/html/rfc5321#section-4.1.1.2
+        .. _`§ 3.3`: https://tools.ietf.org/html/rfc5321#section-3.3
         """
         if options is None:
             options = []
 
-        # FIXME: check if options are supported by server.
-        #        only pass supported options.
-
-        # RFC is not really precise about the format, but this seems to give
-        # good results:
         from_addr = "FROM:<{}>".format(sender)
-
         code, message = await self.do_cmd('MAIL', from_addr, *options)
 
         if code != 250:
@@ -524,7 +513,8 @@ class SMTP:
         """
         Sends a SMTP 'RCPT' command. - Indicates a recipient for the e-mail.
 
-        For further details, please check out `RFC 5321 § 4.1.1.3`_.
+        For further details, please check out `RFC 5321 § 4.1.1.3`_ and
+        `§ 3.3`_.
 
         Args:
             recipient (str): E-mail address of one recipient.
@@ -542,20 +532,15 @@ class SMTP:
                 response.
 
         .. _`RFC 5321 § 4.1.1.3`: https://tools.ietf.org/html/rfc5321#section-4.1.1.3
+        .. _`§ 3.3`: https://tools.ietf.org/html/rfc5321#section-3.3
         """
         if options is None:
             options = []
 
-        # FIXME: check if options are supported by server.
-        #        only pass supported options.
-
-        # RFC is not really precise about the format, but this seems to give
-        # good results:
         to_addr = "TO:<{}>".format(recipient)
-
         code, message = await self.do_cmd('RCPT', to_addr, *options)
 
-        if code != 250:  # FIXME: be more precise.
+        if code != 250:
             raise SMTPRecipientRefusedError(code, message)
 
         return code, message
@@ -580,7 +565,7 @@ class SMTP:
             code, message = await self.do_cmd('QUIT')
         except ConnectionError:
             # We voluntarily ignore this kind of exceptions since... the
-            # connection seems already down.
+            # connection seems already closed.
             pass
 
         await self.close()
@@ -944,12 +929,17 @@ class SMTP:
         extns = {}
         auths = []
 
+        oldstyle_auth_regex = re.compile(r"auth=(?P<auth>.*)", re.IGNORECASE)
+
+        extension_regex = re.compile(r"(?P<feature>[a-z0-9][a-z0-9\-]*) ?",
+                                     re.IGNORECASE)
+
         lines = message.splitlines()
 
         for line in lines[1:]:
             # To be able to communicate with as many SMTP servers as possible,
             # we have to take the old-style auth advertisement into account.
-            match = OLDSTYLE_AUTH_REGEX.match(line)
+            match = oldstyle_auth_regex.match(line)
 
             if match:
                 auth = match.group("auth")[0]
@@ -962,7 +952,7 @@ class SMTP:
             # It's actually stricter, in that only spaces are allowed between
             # parameters, but were not going to check for that here.
             # Note that the space isn't present if there are no parameters.
-            match = EXTENSION_REGEX.match(line)
+            match = extension_regex.match(line)
 
             if match:
                 feature = match.group("feature").lower()
