@@ -3,6 +3,43 @@
 
 """
 Exception classes used in smtplibaio package.
+
+The exhaustive hierarchy of exceptions that might be raised in the smtplibaio
+package is as follows:
+
+    BaseException
+      |
+      + Exception
+          |
+          + SMTPException
+          |   |
+          |   + SMTPAllRecipientsRefusedError
+          |   + SMTPResponseException
+          |       |
+          |       + SMTPCommandNotSupportedError
+          |       + SMTPSenderRefusedError
+          |       + SMTPRecipientRefusedError
+          |       + SMTPDataRefusedError
+          |       + SMTPHelloRefusedError
+          |       + SMTPAuthenticationError
+          |
+          + OSError
+              |
+              + ConnectionError
+                  |
+                  + ConnectionRefusedError
+                  + ConnectionResetError
+
+
+This hierarchy should allow you to easily catch a family of exceptions.
+
+For exemple, you can catch ``SMTPResponseException`` instead of catching all
+of the 6 inheriting classes.
+
+We made our best to document methods docstrings so you should be able to know
+what exceptions a method can raise by reading the method docstring.
+
+Please feel free to make a PR if we missed something.
 """
 
 
