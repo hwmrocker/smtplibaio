@@ -72,7 +72,7 @@ class SMTPStreamReader(StreamReader):
 class SMTPStreamWriter(StreamWriter):
     """
     """
-    async def send_command(self, *args):
+    async def send_command(self, command):
         """
         Sends the given command (and parameters, if any) to the server.
 
@@ -80,7 +80,7 @@ class SMTPStreamWriter(StreamWriter):
             ConnectionResetError: If the connection with the server is lost.
             (Shouldn't it raise BrokenPipeError too ?)
         """
-        command = "{}\r\n".format(" ".join(args)).encode('ascii')
+        command = "{}\r\n".format(command).encode('ascii')
 
         self.write(command)
 
