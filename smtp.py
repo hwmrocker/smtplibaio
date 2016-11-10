@@ -72,19 +72,16 @@ class SMTP:
 
     Class Attributes:
         _default_port (int): Default port to use. Defaults to 25.
-        _debug (bool): Debug mode. A value of True will make the class
-            print more information.
-        _supported_auth_mechanisms (tuple of 2-tuple): List of supported
-            authentication mechanism, ordered by preference of use. The
-            2-tuples consist in :
+        _supported_auth_mechanisms (dict): Dict containing the information
+            about supported authentication mechanisms, ordered by preference
+            of use. The entries consist in :
 
                 - The authentication mechanism name, in lowercase, as given by
                   SMTP servers.
-                - The name of the static method to use to get the
-                  authentication commands to send to the server.
+                - The name of the method to call to authenticate using the
+                  mechanism.
     """
     _default_port = 25
-    _debug = False
 
     _supported_auth_mechanisms = {
         'cram-md5': '_auth_cram_md5',
@@ -153,9 +150,6 @@ class SMTP:
 
                 self._fqdn = "[{}]".format(addr)
 
-        if self.__class__._debug:
-            print("FQDN: {0}".format(self._fqdn), file=stderr)
-
         return self._fqdn
 
     def reset_state(self):
@@ -223,11 +217,6 @@ class SMTP:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
         """
-        if self.__class__._debug:
-            print("Connect: {0}"
-                  .format((self.hostname, self.port)),
-                  file=stderr)
-
         # First build the reader:
         self.reader = SMTPStreamReader(loop=self.loop)
 
@@ -251,10 +240,6 @@ class SMTP:
                                        self.loop)
 
         code, message = await self.reader.read_reply()
-
-        if self.__class__._debug:
-            print("Reply: code: {} - msg: {}".format(code, message),
-                  file=stderr)
 
         if code != 220:
             raise ConnectionRefusedError(code, message)
@@ -282,15 +267,8 @@ class SMTP:
 
         cmd = " ".join(args)
 
-        if self.__class__._debug:
-            print("Send: {0}".format(cmd, file=stderr))
-
         await self.writer.send_command(cmd)
         code, message = await self.reader.read_reply()
-
-        if self.__class__._debug:
-            print("Reply: code: {} - msg: {}".format(code, message),
-                  file=stderr)
 
         if code not in success:
             raise SMTPCommandFailedError(code, message, cmd)
@@ -602,22 +580,14 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.4`: https://tools.ietf.org/html/rfc5321#section-4.1.1.4
         """
-        # This may raise an SMTPCommandFailedError:
         code, message = await self.do_cmd('DATA', success=(354,))
-
-        if self.__class__._debug:
-            print("DATA: {} {}".format(code, message), file=stderr)
 
         email_message = SMTP.prepare_message(email_message)
 
         self.writer.write(email_message)    # write is non-blocking.
         await self.writer.drain()           # don't forget to drain.
 
-        # This may raise an SMTPCommandFailedError:
         code, message = await self.reader.read_reply()
-
-        if self.__class__._debug:
-            print("DATA: {} {}".format(code, message), file=stderr)
 
         return code, message
 
@@ -658,9 +628,6 @@ class SMTP:
                     code, message = await auth_func(username, password)
                 except SMTPAuthenticationError as e:
                     excs.append(e)
-
-                    if self.__class__._debug:
-                        print(e, file=stderr)
                 else:
                     break
         else:
@@ -1005,16 +972,6 @@ class SMTP:
             raise SMTPAuthenticationError(e.code, e.message, mechanism)
 
         return code, message
-
-    @classmethod
-    def set_debug(cls, debug):
-        """
-        Sets the debug option.
-
-        Args:
-            debug (bool): True to set the class in debug mode.
-        """
-        cls._debug = debug
 
     @staticmethod
     def parse_esmtp_extensions(message):
