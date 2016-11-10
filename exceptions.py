@@ -14,13 +14,9 @@ package is as follows:
           + SMTPException
           |   |
           |   + SMTPLoginError
-          |   + SMTPAllRecipientsRefusedError
-          |   + SMTPResponseException
+          |   + SMTPNoRecipientError
+          |   + SMTPCommandFailedError
           |       |
-          |       + SMTPSenderRefusedError
-          |       + SMTPRecipientRefusedError
-          |       + SMTPDataRefusedError
-          |       + SMTPHelloRefusedError
           |       + SMTPAuthenticationError
           |
           + OSError
@@ -29,12 +25,6 @@ package is as follows:
                   |
                   + ConnectionRefusedError
                   + ConnectionResetError
-
-
-This hierarchy should allow you to easily catch a family of exceptions.
-
-For exemple, you can catch ``SMTPResponseException`` instead of catching all
-of the 6 inheriting classes.
 
 We made our best to document methods docstrings so you should be able to know
 what exceptions a method can raise by reading the method docstring.
@@ -49,9 +39,6 @@ class SMTPException(Exception):
 
     Attributes:
         message (str): Exception message, ideally providing help for the user.
-
-    Class attributes:
-        default_message (str): Generic exception message.
 
     .. note:: You SHOULD NOT use this class directly. Instead, you should
         subclass it or use one of the existing subclasses provided in this
@@ -72,7 +59,7 @@ class SMTPException(Exception):
 
 class SMTPLoginError(SMTPException):
     """
-    Raised when the server refuses all authentication attempts.
+    Raised when the client couldn't authenticate to the server.
 
     Attributes:
         exceptions (list of :obj:`SMTPAuthenticationError`): List of
@@ -81,9 +68,6 @@ class SMTPLoginError(SMTPException):
 
     Inherited attributes:
         message: (str): Exception message, ideally providing help for the user.
-
-    Inherited class attributes:
-        default_message (str): Generic exception message.
     """
     def __init__(self, excs):
         """
@@ -94,7 +78,7 @@ class SMTPLoginError(SMTPException):
                 that were raised and that conducted to this exceptions being
                 raised.
         """
-        super().__init__("Login failed: Causes are: \n  {}")
+        super().__init__("Login failed. Causes are: \n  {}")
         self.exceptions = excs
 
     def __str__(self):
@@ -104,31 +88,28 @@ class SMTPLoginError(SMTPException):
 
         return self.message.format(exceptions_str)
 
-class SMTPAllRecipientsRefusedError(SMTPException):
+class SMTPNoRecipientError(SMTPException):
     """
     Raised when the server refuses all recipients addresses.
 
     Attributes:
-        exceptions (list of :obj:`SMTPRecipientRefusedError`): List of
-            exceptions that were raised and that conducted to this exception
-            being raised.
+        exceptions (list of :obj:`SMTPCommandFailedError`): List of
+            exceptions that were raised, caught and that originated this
+            exception.
 
     Inherited attributes:
         message (str): Exception message, ideally providing help for the user.
-
-    Inherited class attributes:
-        default_message (str): Generic exception message.
 
     .. seealso:: :meth:`sendmail` source code.
     """
     def __init__(self, excs):
         """
-        Initializes a new instance of SMTPAllRecipientsRefusedError.
+        Initializes a new instance of SMTPNoRecipientError.
 
         Args:
-            excs (list of :obj:`SMTPRecipientRefusedError`): List of
-                exceptions that were raised and that conducted to this
-                exception being raised.
+            excs (list of :obj:`SMTPCommandFailedError`): List of
+                exceptions that were raised, caught and that originated this
+                exception.
         """
         super().__init__()
         self.exceptions = excs
@@ -140,14 +121,15 @@ class SMTPAllRecipientsRefusedError(SMTPException):
 
 class SMTPCommandFailedError(SMTPException):
     """
-    FIXME
+    Raised when a command fails.
+
+    Attributes:
+        command (str): Command sent to the server that originated the
+            exception.
 
     Inherited attributes:
         message (str): Exception message, ideally providing help for the user.
         code (int): Error code returned by the SMTP server.
-
-    Inherited class attributes:
-        default_message (str): Generic exception message.
     """
     def __init__(self, code, message=None, command=None):
         """
@@ -157,8 +139,8 @@ class SMTPCommandFailedError(SMTPException):
             code (int): Error code returned by the SMTP server.
             message (str): Exception message, ideally providing help for the
                 user.
-            command (str): Command that resulted in this exception being
-                raised.
+            command (str): Command sent to the server that originated the
+                exception.
         """
         super().__init__(message)
         self.code = code
@@ -171,130 +153,18 @@ class SMTPCommandFailedError(SMTPException):
 
         return s.format(self.command, self.code, self.message)
 
-class SMTPResponseException(SMTPException):
-    """
-    Base class for all exceptions that include an SMTP error code.
-
-    Inherited attributes:
-        message (str): Exception message, ideally providing help for the user.
-        code (int): Error code returned by the SMTP server.
-    """
-    def __init__(self, code, message=None):
-        """
-        Initializes a new instance of SMTPReponseException.
-
-        Args:
-            code (int): Error code returned by the SMTP server.
-            message (str): Exception message, ideally providing help for the
-                user.
-        """
-        super().__init__(message)
-        self.code = code
-
-class SMTPSenderRefusedError(SMTPResponseException):
-    """
-    Raised when the server refuses the sender address.
-
-    Attributes:
-        sender (str): Sender address that is refused.
-
-    Inherited attributes:
-        message (str): Exception message, ideally providing help for the user.
-        code (int): Error code returned by the SMTP server.
-
-    Inherited class attributes:
-        default_message (str): Generic exception message.
-    """
-    default_message = "Sender refused by the server."
-
-    def __init__(self, sender, code, message=None):
-        """
-        Initializes a new instance of SMTPSenderRefusedError.
-
-        Args:
-            sender (str): Sender e-mail address that was refused.
-            code (int): Error code returned by the SMTP server.
-            message (str): Exception message, ideally providing help for the
-                user.
-        """
-        super().__init__(code, message)
-        self.sender = sender
-
-    def __str__(self):
-        """
-        """
-        return "Sender <{}>: {}".format(self.sender, self.message)
-
-class SMTPRecipientRefusedError(SMTPResponseException):
-    """
-    Raised when the server refuses a recipient address.
-
-    Attributes:
-        recipient (str): Recipient address that is refused.
-
-    Inherited attributes:
-        message (str): Exception message, ideally providing help for the user.
-        code (int): Error code returned by the SMTP server.
-
-    Inherited class attributes:
-        default_message (str): Generic exception message.
-    """
-    default_message = "Recipient refused by the server."
-
-    def __init__(self, recipient, code, message=None):
-        """
-        Initializes a new instance of SMTPRecipientRefusedError.
-
-        Args:
-            recipient (str): Recipient e-mail address that was refused.
-            code (int): Error code returned by the SMTP server.
-            message (str): Exception message, ideally providing help for the
-                user.
-
-        """
-        super().__init__(code, message)
-        self.recipient = recipient
-
-    def __str__(self):
-        """
-        """
-        return "Recipient <{}>: {}".format(self.recipient, self.message)
-
-class SMTPDataRefusedError(SMTPResponseException):
-    """
-    Raised when the server refuses our DATA content.
-
-    Inherited attributes:
-        message (str): Exception message, ideally providing help for the user.
-        code (int): Error code returned by the SMTP server.
-    """
-    
-    default_message = "DATA refused by the server."
-
-
-class SMTPHelloRefusedError(SMTPResponseException):
-    """
-    Raised when the server refuses our HELO/EHLO greeting.
-
-    Inherited attributes:
-        message (str): Exception message, ideally providing help for the user.
-        code (int): Error code returned by the SMTP server.
-    """
-    def __str__(self):
-        """
-        """
-        return "HELO or EHLO 
-        if self.message is None:
-            self.message = "{} HELO or EHLO refused by the server
-
-class SMTPAuthenticationError(SMTPResponseException):
+class SMTPAuthenticationError(SMTPCommandFailedError):
     """
     Raised when the server rejects our authentication attempt.
 
+    Attributes:
+        mechanism (str): Name of the mechanism used to authenticate.
+
     Inherited attributes:
         message (str): Exception message, ideally providing help for the user.
         code (int): Error code returned by the SMTP server.
-        mechanism (str): Name of the mechanism used to authenticate.
+        command (str): Command sent to the server that originated the
+            exception.
    """
     def __init__(self, code, message=None, mechanism=None):
         """

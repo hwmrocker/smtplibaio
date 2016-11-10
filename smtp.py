@@ -27,13 +27,10 @@ import ssl
 from sys import stderr
 
 from exceptions import (
-    SMTPSenderRefusedError,
-    SMTPRecipientRefusedError,
-    SMTPAllRecipientsRefusedError,
-    SMTPDataRefusedError,
-    SMTPHelloRefusedError,
+    SMTPNoRecipientError,
     SMTPLoginError,
     SMTPAuthenticationError,
+    SMTPCommandFailedError,
 )
 from streams import (
     SMTPStreamReader,
@@ -223,11 +220,9 @@ class SMTP:
                 SMTP server can not be established.
 
         Returns:
-            bool: True if the connection between client and server is
-                established.
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
         """
-        connected = False
-
         if self.__class__._debug:
             print("Connect: {0}"
                   .format((self.hostname, self.port)),
@@ -261,14 +256,12 @@ class SMTP:
             print("Reply: code: {} - msg: {}".format(code, message),
                   file=stderr)
 
-        connected = (code == 220)
-
-        if not connected:
+        if code != 220:
             raise ConnectionRefusedError(code, message)
 
-        return connected
+        return code, message
 
-    async def do_cmd(self, *args):
+    async def do_cmd(self, *args, success=None):
         """
         Sends the given command to the server.
 
@@ -278,20 +271,29 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
+            SMTPCommandFailedError: If the command fails.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
         """
-        if self.__class__._debug:
-            print("Send: {0}".format(" ".join(args)), file=stderr)
+        if success is None:
+            success = (250,)
 
-        await self.writer.send_command(*args)
+        cmd = " ".join(args)
+
+        if self.__class__._debug:
+            print("Send: {0}".format(cmd, file=stderr))
+
+        await self.writer.send_command(cmd)
         code, message = await self.reader.read_reply()
 
         if self.__class__._debug:
             print("Reply: code: {} - msg: {}".format(code, message),
                   file=stderr)
+
+        if code not in success:
+            raise SMTPCommandFailedError(code, message, cmd)
 
         return code, message
 
@@ -310,7 +312,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
-            SMTPHelloRefusedError: If the server refuses our HELO greeting.
+            SMTPCommandFailedError: If the server refuses our HELO greeting.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -318,16 +320,15 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.1`: https://tools.ietf.org/html/rfc5321#section-4.1.1.1
         """
-        cmd = 'HELO'
-
         if from_host is None:
             from_host = self.fqdn
 
-        code, message = await self.do_cmd(cmd, from_host)
-        self.last_helo_response = (code, message)
-
-        if code != 250:
-            raise SMTPHelloRefusedError(code, message)
+        try:
+            code, message = await self.do_cmd('HELO', from_host)
+        except SMTPCommandFailedError:
+            raise
+        else:
+            self.last_helo_response = (code, message)
 
         return code, message
 
@@ -346,7 +347,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
-            SMTPHelloRefusedError: If the server refuses our EHLO greeting.
+            SMTPCommandFailedError: If the server refuses our EHLO greeting.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -357,16 +358,17 @@ class SMTP:
         if from_host is None:
             from_host = self.fqdn
 
-        code, message = await self.do_cmd('EHLO', from_host)
-        self.last_ehlo_response = (code, message)
+        try:
+            code, message = await self.do_cmd('EHLO', from_host)
+        except SMTPCommandFailedError:
+            raise
+        else:
+            self.last_ehlo_response = (code, message)
 
-        if code == 250:
             extns, auths = SMTP.parse_esmtp_extensions(message)
             self.esmtp_extensions = extns
             self.auth_mechanisms = auths
             self.supports_esmtp = True
-        else:
-            raise SMTPHelloRefusedError(code, message)
 
         return code, message
 
@@ -384,6 +386,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
+            SMTPCommandFailedError: If the HELP command fails.
 
         Returns:
             Help text as given by the server.
@@ -406,6 +409,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
+            SMTPCommandFailedError: If the RSET command fails.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -424,6 +428,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
+            SMTPCommandFailedError: If the NOOP command fails.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -445,6 +450,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
+            SMTPCommandFailedError: If the VRFY command fails.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -466,6 +472,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
+            SMTPCommandFailedError: If the EXPN command fails.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -490,8 +497,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
-            SMTPSenderRefusedError: If the server refuses the given sender
-                e-mail address.
+            SMTPCommandFailedError: If the MAIL command fails.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -505,9 +511,6 @@ class SMTP:
 
         from_addr = "FROM:<{}>".format(sender)
         code, message = await self.do_cmd('MAIL', from_addr, *options)
-
-        if code != 250:
-            raise SMTPSenderRefusedError(code, message)
 
         return code, message
 
@@ -526,8 +529,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
-            SMTPRecipientRefusedError: If the server refuses the given
-                recipient e-mail address.
+            SMTPCommandFailedError: If the RCPT command fails.
 
         Returns:
             (int, str): A (code, message) 2-tuple containing the server
@@ -541,9 +543,6 @@ class SMTP:
 
         to_addr = "TO:<{}>".format(recipient)
         code, message = await self.do_cmd('RCPT', to_addr, *options)
-
-        if code != 250:
-            raise SMTPRecipientRefusedError(code, message)
 
         return code, message
 
@@ -569,6 +568,8 @@ class SMTP:
             # We voluntarily ignore this kind of exceptions since... the
             # connection seems already closed.
             pass
+        except SMTPCommandFailedError:
+            pass
 
         await self.close()
 
@@ -588,10 +589,9 @@ class SMTP:
             email_message (str or bytes): Message to be sent.
 
         Raises:
-            SMTPDataRefusedError: If the server refuses to handle the given
-                data.
             ConnectionError subclass: If the connection to the server is
                 unexpectedely lost.
+            SMTPCommandFailedError: If the DATA command fails.
 
          Returns:
             (int, str): A (code, message) 2-tuple containing the server last
@@ -602,30 +602,22 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.4`: https://tools.ietf.org/html/rfc5321#section-4.1.1.4
         """
-        data_accepted = False
-
-        code, message = await self.do_cmd('DATA')
+        # This may raise an SMTPCommandFailedError:
+        code, message = await self.do_cmd('DATA', success=(354,))
 
         if self.__class__._debug:
             print("DATA: {} {}".format(code, message), file=stderr)
 
-        # Check intermediate server reply:
-        if code == 354:
-            email_message = SMTP.prepare_message(email_message)
+        email_message = SMTP.prepare_message(email_message)
 
-            self.writer.write(email_message)    # write is non-blocking.
-            await self.writer.drain()           # don't forget to drain.
+        self.writer.write(email_message)    # write is non-blocking.
+        await self.writer.drain()           # don't forget to drain.
 
-            code, message = await self.reader.read_reply()
+        # This may raise an SMTPCommandFailedError:
+        code, message = await self.reader.read_reply()
 
-            if self.__class__._debug:
-                print("DATA: {} {}".format(code, message), file=stderr)
-
-            if code == 250:
-                data_accepted = True
-
-        if not data_accepted:
-            raise SMTPDataRefusedError(code, message)
+        if self.__class__._debug:
+            print("DATA: {} {}".format(code, message), file=stderr)
 
         return code, message
 
@@ -640,7 +632,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
-            SMTPHelloRefusedError: If the server refuses our EHLO/HELO
+            SMTPCommandFailedError: If the server refuses our EHLO/HELO
                 greeting.
             SMTPLoginError: If the authentication failed (either because all
                 attempts failed or because there was no suitable authentication
@@ -773,14 +765,12 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
-            SMTPHelloRefusedError: If the server refuses our EHLO/HELO
+            SMTPCommandFailedError: If the server refuses our EHLO/HELO
                 greeting.
-            SMTPSenderRefusedError: If the server refuses the given sender
-                e-mail address.
-            SMTPAllRecipientsRefusedError: If the server refuses all given
+            SMTPCommandFailedError: If the server refuses our MAIL command.
+            SMTPCommandFailedError: If the server refuses our DATA command.
+            SMTPNoRecipientError: If the server refuses all given
                 recipients.
-            SMTPDataRefusedError: If the server refuses to handle the given
-                message.
 
         Returns:
             dict: A dict containing an entry for each recipient that was
@@ -812,7 +802,7 @@ class SMTP:
             if "size" in self.esmtp_extensions:
                 mail_options.append("size={}".format(len(message)))
 
-        # This may raise an SMTPSenderRefusedError:
+        # This may raise an SMTPCommandFailedError exception:
         await self.mail(sender, mail_options)
 
         errors = {}
@@ -820,14 +810,14 @@ class SMTP:
         for recipient in recipients:
             try:
                 await self.rcpt(recipient, rcpt_options)
-            except SMTPRecipientRefusedError as e:
+            except SMTPCommandFailedError as e:
                 errors[recipient] = (e.code, e.message)
 
         if len(recipients) == len(errors):
             # The server refused all our recipients:
-            raise SMTPAllRecipientsRefusedError(errors)
+            raise SMTPNoRecipientError(errors)
 
-        # This may raise an SMTPDataRefusedError:
+        # This may raise an SMTPCommandFailedError exception:
         await self.data(message)
 
         # If we got here then somebody got our mail:
@@ -851,7 +841,7 @@ class SMTP:
         Raises:
             ConnectionResetError: If the connection with the server is
                 unexpectedely lost.
-            SMTPHelloRefusedError: If the server refuses our EHLO/HELO
+            SMTPCommandFailedError: If the server refuses our EHLO/HELO
                 greeting.
         """
         no_helo = self.last_helo_response == (None, None)
@@ -861,7 +851,7 @@ class SMTP:
             try:
                 # First we try EHLO:
                 await self.ehlo()
-            except ConnectionRefusedError:
+            except SMTPCommandFailedError:
                 # EHLO failed, let's try HELO:
                 await self.helo()
 
@@ -910,29 +900,25 @@ class SMTP:
                 response.
         """
         mechanism = 'CRAM-MD5'
-        authenticated = False
 
-        cmd = "{} {}".format('AUTH', mechanism)
-        code, message = await self.do_cmd(cmd)
+        # This may raise an SMTPCommandFailedError exception:
+        code, message = await self.do_cmd('AUTH', mechanism, success=(334,))
 
-        if code == 334:
-            decoded_challenge = base64.b64decode(message)
+        decoded_challenge = base64.b64decode(message)
 
-            challenge_hash = hmac.new(key=password.encode('ascii'),
-                                      msg=decoded_challenge,
-                                      digestmod='md5')
+        challenge_hash = hmac.new(key=password.encode('ascii'),
+                                  msg=decoded_challenge,
+                                  digestmod='md5')
 
-            hex_hash = challenge_hash.hexdigest()
-            response = "{} {}".format(username, hex_hash)
+        hex_hash = challenge_hash.hexdigest()
+        response = "{} {}".format(username, hex_hash)
+        encoded_response = SMTP.b64enc(response)
 
-            encoded_response = SMTP.b64enc(response)
-            code, message = await self.do_cmd(encoded_response)
-
-            if code in (235, 503):
-                authenticated = True
-
-        if not authenticated:
-           raise SMTPAuthenticationError(code, message, mechanism)
+        try:
+            code, message = await self.do_cmd(encoded_response,
+                                              success=(235, 503))
+        except SMTPCommandFailedError as e:
+            raise SMTPAuthenticationError(e.code, e.message, mechanism)
 
         return code, message
 
@@ -965,20 +951,17 @@ class SMTP:
                 response.
         """
         mechanism = 'LOGIN'
-        authenticated = False
 
-        cmd = "{} {} {}".format('AUTH', mechanism, SMTP.b64enc(username))
-        code, message = await self.do_cmd(cmd)
+        # This may raise an SMTPCommandFailedError:
+        code, message = await self.do_cmd('AUTH', mechanism,
+                                          SMTP.b64enc(username),
+                                          success=(334,))
 
-        if code == 334:
-            cmd = SMTP.b64enc(password)
-            code, message = await self.do_cmd(cmd)
-
-            if code in (235, 503):
-                authenticated = True
-
-        if not authenticated:
-            raise SMTPAuthenticationError(code, message, mechanism)
+        try:
+            code, message = await self.do_cmd(SMTP.b64enc(password),
+                                              success=(235, 503))
+        except SMTPCommandFailedError as e:
+            raise SMTPAuthenticationError(e.code, e.message, mechanism)
 
         return code, message
 
@@ -1013,12 +996,13 @@ class SMTP:
 
         credentials = "\0{}\0{}".format(username, password)
         encoded_credentials = SMTP.b64enc(credentials)
-        cmd = "{} {} {}".format('AUTH', mechanism, encoded_credentials)
 
-        code, message = await self.do_cmd(cmd)
-
-        if code not in (235, 503):
-            raise SMTPAuthenticationError(code, message, mechanism)
+        try:
+            code, message = await self.do_cmd('AUTH', mechanism,
+                                              encoded_credentials,
+                                              success=(235, 503))
+        except SMTPCommandFailedError as e:
+            raise SMTPAuthenticationError(e.code, e.message, mechanism)
 
         return code, message
 
