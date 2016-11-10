@@ -78,7 +78,7 @@ class SMTPLoginError(SMTPException):
                 that were raised and that conducted to this exceptions being
                 raised.
         """
-        super().__init__("Login failed. Causes are: \n  {}")
+        super().__init__("Login failed:\n  {}")
         self.exceptions = excs
 
     def __str__(self):
@@ -111,13 +111,15 @@ class SMTPNoRecipientError(SMTPException):
                 exceptions that were raised, caught and that originated this
                 exception.
         """
-        super().__init__()
+        super().__init__("Could not send e-mail:\n  {}")
         self.exceptions = excs
 
     def __str__(self):
         """
         """
-        return "\n".join([str(e) for e in self.exceptions])
+        exceptions_str = "\n  ".join([str(e) for e in self.exceptions])
+
+        return self.message.format(exceptions_str)
 
 class SMTPCommandFailedError(SMTPException):
     """

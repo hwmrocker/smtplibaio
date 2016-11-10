@@ -24,8 +24,6 @@ import re
 import socket
 import ssl
 
-from sys import stderr
-
 from exceptions import (
     SMTPNoRecipientError,
     SMTPLoginError,
@@ -144,8 +142,8 @@ class SMTP:
                 except socket.gaierror:
                     addr = "127.0.0.1"
                 else:
-                    # We only consider the first returned result and we're only
-                    # interested in getting the IP(v4 or v6) address:
+                    # We only consider the first returned result and we're
+                    # only interested in getting the IP(v4 or v6) address:
                     addr = info[0][4][0]
 
                 self._fqdn = "[{}]".format(addr)
@@ -301,12 +299,9 @@ class SMTP:
         if from_host is None:
             from_host = self.fqdn
 
-        try:
-            code, message = await self.do_cmd('HELO', from_host)
-        except SMTPCommandFailedError:
-            raise
-        else:
-            self.last_helo_response = (code, message)
+        code, message = await self.do_cmd('HELO', from_host)
+
+        self.last_helo_response = (code, message)
 
         return code, message
 
@@ -336,17 +331,14 @@ class SMTP:
         if from_host is None:
             from_host = self.fqdn
 
-        try:
-            code, message = await self.do_cmd('EHLO', from_host)
-        except SMTPCommandFailedError:
-            raise
-        else:
-            self.last_ehlo_response = (code, message)
+        code, message = await self.do_cmd('EHLO', from_host)
 
-            extns, auths = SMTP.parse_esmtp_extensions(message)
-            self.esmtp_extensions = extns
-            self.auth_mechanisms = auths
-            self.supports_esmtp = True
+        self.last_ehlo_response = (code, message)
+
+        extns, auths = SMTP.parse_esmtp_extensions(message)
+        self.esmtp_extensions = extns
+        self.auth_mechanisms = auths
+        self.supports_esmtp = True
 
         return code, message
 
@@ -615,7 +607,7 @@ class SMTP:
         # EHLO/HELO is required:
         await self.ehlo_or_helo_if_needed()
 
-        excs = []   # To store SMTPAuthenticationErrors
+        errors = []   # To store SMTPAuthenticationErrors
         code = message = None
 
         # Try to authenticate using all mechanisms supported by both
@@ -627,15 +619,15 @@ class SMTP:
                 try:
                     code, message = await auth_func(username, password)
                 except SMTPAuthenticationError as e:
-                    excs.append(e)
+                    errors.append(e)
                 else:
                     break
         else:
             if not excs:
                 err = "Could not find any suitable authentication mechanism."
-                excs.append(SMTPAuthenticationError(-1, err))
+                errors.append(SMTPAuthenticationError(-1, err))
 
-            raise SMTPLoginError(excs)
+            raise SMTPLoginError(errors)
 
         return code, message
 
@@ -769,22 +761,20 @@ class SMTP:
             if "size" in self.esmtp_extensions:
                 mail_options.append("size={}".format(len(message)))
 
-        # This may raise an SMTPCommandFailedError exception:
         await self.mail(sender, mail_options)
 
-        errors = {}
+        errors = []
 
         for recipient in recipients:
             try:
                 await self.rcpt(recipient, rcpt_options)
             except SMTPCommandFailedError as e:
-                errors[recipient] = (e.code, e.message)
+                errors.append(e)
 
         if len(recipients) == len(errors):
             # The server refused all our recipients:
             raise SMTPNoRecipientError(errors)
 
-        # This may raise an SMTPCommandFailedError exception:
         await self.data(message)
 
         # If we got here then somebody got our mail:
@@ -868,7 +858,6 @@ class SMTP:
         """
         mechanism = 'CRAM-MD5'
 
-        # This may raise an SMTPCommandFailedError exception:
         code, message = await self.do_cmd('AUTH', mechanism, success=(334,))
 
         decoded_challenge = base64.b64decode(message)
@@ -919,7 +908,6 @@ class SMTP:
         """
         mechanism = 'LOGIN'
 
-        # This may raise an SMTPCommandFailedError:
         code, message = await self.do_cmd('AUTH', mechanism,
                                           SMTP.b64enc(username),
                                           success=(334,))
