@@ -27,12 +27,12 @@ import ssl
 from sys import stderr
 
 from exceptions import (
-    SMTPCommandNotSupportedError,
     SMTPSenderRefusedError,
     SMTPRecipientRefusedError,
     SMTPAllRecipientsRefusedError,
     SMTPDataRefusedError,
     SMTPHelloRefusedError,
+    SMTPLoginError,
     SMTPAuthenticationError,
 )
 from streams import (
@@ -89,11 +89,11 @@ class SMTP:
     _default_port = 25
     _debug = False
 
-    _supported_auth_mechanisms = (
-        ('cram-md5', 'auth_cram_md5'),
-        ('plain', 'auth_plain'),
-        ('login', 'auth_login'),
-    )
+    _supported_auth_mechanisms = {
+        'cram-md5': '_auth_cram_md5',
+        'plain': '_auth_plain',
+        'login': '_auth_login',
+    }
 
     def __init__(self, hostname='localhost', port=_default_port, fqdn=None,
                  timeout=socket._GLOBAL_DEFAULT_TIMEOUT, loop=None):
@@ -318,10 +318,12 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.1`: https://tools.ietf.org/html/rfc5321#section-4.1.1.1
         """
+        cmd = 'HELO'
+
         if from_host is None:
             from_host = self.fqdn
 
-        code, message = await self.do_cmd('HELO', from_host)
+        code, message = await self.do_cmd(cmd, from_host)
         self.last_helo_response = (code, message)
 
         if code != 250:
@@ -358,13 +360,13 @@ class SMTP:
         code, message = await self.do_cmd('EHLO', from_host)
         self.last_ehlo_response = (code, message)
 
-        if code != 250:
+        if code == 250:
+            extns, auths = SMTP.parse_esmtp_extensions(message)
+            self.esmtp_extensions = extns
+            self.auth_mechanisms = auths
+            self.supports_esmtp = True
+        else:
             raise SMTPHelloRefusedError(code, message)
-
-        extns, auths = SMTP.parse_esmtp_extensions(message)
-        self.esmtp_extensions = extns
-        self.auth_mechanisms = auths
-        self.supports_esmtp = True
 
         return code, message
 
@@ -600,26 +602,29 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.4`: https://tools.ietf.org/html/rfc5321#section-4.1.1.4
         """
+        data_accepted = False
+
         code, message = await self.do_cmd('DATA')
 
         if self.__class__._debug:
             print("DATA: {} {}".format(code, message), file=stderr)
 
         # Check intermediate server reply:
-        if code != 354:
-            raise SMTPDataRefusedError(code, message)
+        if code == 354:
+            email_message = SMTP.prepare_message(email_message)
 
-        email_message = SMTP.prepare_message(email_message)
+            self.writer.write(email_message)    # write is non-blocking.
+            await self.writer.drain()           # don't forget to drain.
 
-        self.writer.write(email_message)    # write is non-blocking.
-        await self.writer.drain()           # don't forget to drain.
+            code, message = await self.reader.read_reply()
 
-        code, message = await self.reader.read_reply()
+            if self.__class__._debug:
+                print("DATA: {} {}".format(code, message), file=stderr)
 
-        if self.__class__._debug:
-            print("DATA: {} {}".format(code, message), file=stderr)
+            if code == 250:
+                data_accepted = True
 
-        if code != 250:
+        if not data_accepted:
             raise SMTPDataRefusedError(code, message)
 
         return code, message
@@ -637,72 +642,41 @@ class SMTP:
                 unexpectedely lost.
             SMTPHelloRefusedError: If the server refuses our EHLO/HELO
                 greeting.
-            SMTPCommandNotSupportedError: If the server does not support
-                authentication.
+            SMTPLoginError: If the authentication failed (either because all
+                attempts failed or because there was no suitable authentication
+                mechanism).
 
         Returns:
-            bool: True if the user could log in to the server using at least
-                one mechanism.
+            (int, str): A (code, message) 2-tuple containing the last server
+                response.
         """
-        authenticated = False
-
         # EHLO/HELO is required:
         await self.ehlo_or_helo_if_needed()
 
-        # Check that the server supports AUTH:
-        if "auth" not in self.esmtp_extensions:
-            err = "SMTP AUTH extension not supported."
-            raise SMTPCommandNotSupportedError(-1, err)
+        excs = []   # To store SMTPAuthenticationErrors
+        code = message = None
+
+        # Try to authenticate using all mechanisms supported by both
+        # server and client (and only these):
+        for auth, meth in self.__class__._supported_auth_mechanisms.items():
+            if auth in self.auth_mechanisms:
+                auth_func = getattr(self, meth)
+
+                try:
+                    code, message = await auth_func(username, password)
+                except SMTPAuthenticationError as e:
+                    excs.append(e)
+
+                    if self.__class__._debug:
+                        print(e, file=stderr)
+                else:
+                    break
         else:
-            # Try authenticating using all mechanisms supported by both
-            # server and client:
-            for auth, meth in self.__class__._supported_auth_mechanisms:
-                if auth in self.auth_mechanisms:
-                    # Retrieve the staticmethod that will give us the keys
-                    # commands to authenticate using that specific mechanism:
-                    f = getattr(SMTP, meth)
+            if not excs:
+                err = "Could not find any suitable authentication mechanism."
+                excs.append(SMTPAuthenticationError(-1, err))
 
-                    try:
-                        await self._authenticate(f, username, password)
-                    except SMTPAuthenticationError as e:
-                        if self.__class__._debug:
-                            print("{}: {}".format(auth, e), file=stderr)
-                    else:
-                        authenticated = True
-                        break
-
-        return authenticated
-
-    async def _authenticate(self, meth, username, password):
-        """
-        Tries to authenticate the user to the server, using one mechanism.
-
-        Args:
-            meth (function): Function used to get the commands to send to the
-                SMTP server to authenticate the user.
-            username (str): Username.
-            password (str): Password.
-
-        Raises:
-            ConnectionResetError: If the connection with the server is
-                unexpectedely lost.
-            SMTPAuthenticationError: If the server refuses the authentication
-                attempt.
-
-        Returns:
-            (int, str): A (code, message) 2-tuple containing the server
-                response to the last query.
-        """
-        first_cmd, then = meth(username, password)
-
-        code, message = await self.do_cmd(first_cmd)
-
-        if code == 334 and then is not None:
-            code, message = await self.do_cmd(then(code, message))
-
-        if code not in (235, 503):
-            raise SMTPAuthenticationError("Authentication failed: {}"
-                                          .format(message))
+            raise SMTPLoginError(excs)
 
         return code, message
 
@@ -902,6 +876,152 @@ class SMTP:
 
         self.reset_state()
 
+    async def _auth_cram_md5(self, username, password):
+        """
+        Performs an authentication attemps using the CRAM-MD5 mechanism.
+
+        Protocol:
+
+            1. Send 'AUTH CRAM-MD5' to server ;
+            2. If the server replies with a 334 return code, we can go on:
+
+                1) The challenge (sent by the server) is base64-decoded ;
+                2) The decoded challenge is hashed using HMAC-MD5 and the user
+                   password as key (shared secret) ;
+                3) The hashed challenge is converted to a string of lowercase
+                   hexadecimal digits ;
+                4) The username and a space character are prepended to the hex
+                   digits ;
+                5) The concatenation is base64-encoded and sent to the server.
+                6) If the server replies with a return code of 235, user is
+                   authenticated.
+
+        Args:
+            username (str): Identifier of the user trying to authenticate.
+            password (str): Password for the user.
+
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+            SMTPAuthenticationError: If the authentication attempt fails.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+        """
+        mechanism = 'CRAM-MD5'
+        authenticated = False
+
+        cmd = "{} {}".format('AUTH', mechanism)
+        code, message = await self.do_cmd(cmd)
+
+        if code == 334:
+            decoded_challenge = base64.b64decode(message)
+
+            challenge_hash = hmac.new(key=password.encode('ascii'),
+                                      msg=decoded_challenge,
+                                      digestmod='md5')
+
+            hex_hash = challenge_hash.hexdigest()
+            response = "{} {}".format(username, hex_hash)
+
+            encoded_response = SMTP.b64enc(response)
+            code, message = await self.do_cmd(encoded_response)
+
+            if code in (235, 503):
+                authenticated = True
+
+        if not authenticated:
+           raise SMTPAuthenticationError(code, message, mechanism)
+
+        return code, message
+
+    async def _auth_login(self, username, password):
+        """
+        Performs an authentication attempt using the LOGIN mechanism.
+
+        Protocol:
+
+            1. The username is base64-encoded ;
+            2. The string 'AUTH LOGIN' and a space character are prepended to
+               the base64-encoded username and sent to the server ;
+            3. If the server replies with a 334 return code, we can go on:
+
+                1) The password is base64-encoded and sent to the server ;
+                2) If the server replies with a 235 return code, the user is
+                   authenticated.
+
+        Args:
+            username (str): Identifier of the user trying to authenticate.
+            password (str): Password for the user.
+
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+            SMTPAuthenticationError: If the authentication attempt fails.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+        """
+        mechanism = 'LOGIN'
+        authenticated = False
+
+        cmd = "{} {} {}".format('AUTH', mechanism, SMTP.b64enc(username))
+        code, message = await self.do_cmd(cmd)
+
+        if code == 334:
+            cmd = SMTP.b64enc(password)
+            code, message = await self.do_cmd(cmd)
+
+            if code in (235, 503):
+                authenticated = True
+
+        if not authenticated:
+            raise SMTPAuthenticationError(code, message, mechanism)
+
+        return code, message
+
+    async def _auth_plain(self, username, password):
+        """
+        Performs an authentication attempt using the PLAIN mechanism.
+
+        Protocol:
+
+            1. Format the username and password in a suitable way ;
+            2. The formatted string is base64-encoded ;
+            3. The string 'AUTH PLAIN' and a space character are prepended to
+               the base64-encoded username and password and sent to the
+               server ;
+            4. If the server replies with a 235 return code, user is
+               authenticated.
+
+        Args:
+            username (str): Identifier of the user trying to authenticate.
+            password (str): Password for the user.
+
+        Raises:
+            ConnectionResetError: If the connection with the server is
+                unexpectedely lost.
+            SMTPAuthenticationError: If the authentication attempt fails.
+
+        Returns:
+            (int, str): A (code, message) 2-tuple containing the server
+                response.
+        """
+        mechanism = 'PLAIN'
+
+        credentials = "\0{}\0{}".format(username, password)
+        encoded_credentials = SMTP.b64enc(credentials)
+        cmd = "{} {} {}".format('AUTH', mechanism, encoded_credentials)
+
+        code, message = await self.do_cmd(cmd)
+
+        if code not in (235, 503):
+            raise SMTPAuthenticationError(code, message, mechanism)
+
+        return code, message
+
     @classmethod
     def set_debug(cls, debug):
         """
@@ -1025,138 +1145,6 @@ class SMTP:
         bytes_message += b"\r\n.\r\n"
 
         return bytes_message
-
-    @staticmethod
-    def auth_cram_md5(username, password):
-        """
-        Returns the commands to send to the server to authenticate a user using
-        the CRAM-MD5 mechanism.
-
-        Protocol:
-
-            1. Send 'AUTH CRAM-MD5' to server ;
-            2. If the server replies with a 334 return code, we can go on:
-
-                1) The challenge (sent by the server) is base64-decoded ;
-                2) The decoded challenge is hashed using HMAC-MD5 and the user
-                   password as key (shared secret) ;
-                3) The hashed challenge is converted to a string of lowercase
-                   hexadecimal digits ;
-                4) The username and a space character are prepended to the hex
-                   digits ;
-                5) The concatenation is base64-encoded and sent to the server.
-                6) If the server replies with a return code of 235, user is
-                   authenticated.
-
-        Args:
-            username (str): Identifier of the user trying to authenticate.
-            password (str): Password for the user.
-
-        Raises:
-            ConnectionResetError: If the connection with the server is
-                unexpectedely lost.
-
-        Returns:
-            (str, func): A (command, function) 2-tuple containing the first
-                command to send to the server and a function that will compute
-                the second command to send to the server if the first one
-                succeeds.
-        """
-        cmd = "{} {}".format("AUTH", "CRAM-MD5")
-
-        def then(code, challenge):
-            decoded_challenge = base64.b64decode(challenge)
-
-            challenge_hash = hmac.new(key=password.encode('ascii'),
-                                      msg=decoded_challenge,
-                                      digestmod='md5')
-
-            hex_hash = challenge_hash.hexdigest()
-            response = "{} {}".format(username, hex_hash)
-            encoded_response = SMTP.b64enc(response)
-
-            return encoded_response
-
-        return cmd, then
-
-    @staticmethod
-    def auth_login(username, password):
-        """
-        Returns the commands to send to the server to authenticate a user using
-        the LOGIN mechanism.
-
-        Protocol:
-
-            1. The username is base64-encoded ;
-            2. The string 'AUTH LOGIN' and a space character are prepended to
-               the base64-encoded username and sent to the server ;
-            3. If the server replies with a 334 return code, we can go on:
-
-                1) The password is base64-encoded and sent to the server ;
-                2) If the server replies with a 235 return code, the user is
-                   authenticated.
-
-        Args:
-            username (str): Identifier of the user trying to authenticate.
-            password (str): Password for the user.
-
-        Raises:
-            ConnectionResetError: If the connection with the server is
-                unexpectedely lost.
-
-        Returns:
-            (str, func): A (command, function) 2-tuple containing the first
-                command to send to the server and a function that will compute
-                the second command to send to the server if the first one
-                succeeds.
-        """
-        cmd = "{} {} {}".format('AUTH', 'LOGIN', SMTP.b64enc(username))
-
-        def then(code, message):
-            return SMTP.b64enc(password)
-
-        return cmd, then
-
-    @staticmethod
-    def auth_plain(username, password):
-        """
-        Returns the commands to send to the server to authenticate a user using
-        the PLAIN mechanism.
-
-        Protocol:
-
-            1. Format the username and password in a suitable way ;
-            2. The formatted string is base64-encoded ;
-            3. The string 'AUTH PLAIN' and a space character are prepended to
-               the base64-encoded username and password and sent to the
-               server ;
-            4. If the server replies with a 235 return code, user is
-               authenticated.
-
-        Args:
-            username (str): Identifier of the user trying to authenticate.
-            password (str): Password for the user.
-
-        Raises:
-            ConnectionResetError: If the connection with the server is
-                unexpectedely lost.
-
-        Returns:
-            (str, None): A (command, None) 2-tuple containing the command to
-                send to the server and None. With PLAIN, only one command is
-                required to authenticate a user. To remain consistent with
-                others *auth_\** methods, we still return a 2-tuple.
-        """
-        credentials = "\0{}\0{}".format(username, password)
-        encoded_credentials = SMTP.b64enc(credentials)
-        cmd = "{} {} {}".format('AUTH', 'PLAIN', encoded_credentials)
-
-        return cmd, None
-
-    async def auth_gssapi(self, username, password):
-        """
-        """
-        raise NotImplementedError
 
     @staticmethod
     def b64enc(s):
