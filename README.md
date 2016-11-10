@@ -8,16 +8,12 @@ Example
 ```Python
 import asyncio
 
-from smtplibaio import SMTP
+from smtp import SMTP
 
 try:
     async with SMTP() as client:
-        try:
-            auth = await client.login(username, password)
-        except SMTPAuthenticationError:
-            print("Unable to authenticate to the server.")
-        else:
-            client.sendmail(from_addr, to_addr, message)
+        auth = await client.login(username, password)
+        client.sendmail(from_addr, to_addr, message)
 except ConnectionRefusedError:
     print("Could not connect to SMTP server.")
 except ConnectionError:
