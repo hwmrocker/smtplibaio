@@ -8,7 +8,6 @@ Example
 =======
 
 .. code-block:: python
-    :linenos:
     
     import asyncio
     
@@ -38,5 +37,4 @@ Current limitations
 ===================
 
 * STARTTLS is not supported yet,
-* Sending Python's ``email.message.Message`` is not supported. You can still use ``email.message.Message.as_string()`` or ``str(email.message.Message)`` instead.:wq
-
+* There is no direct support for Python's ``email.message.Message``. You can still use ``email.message.Message.as_string()`` or ``str(email.message.Message)`` instead.
