@@ -57,6 +57,7 @@ class SMTPException(Exception):
         """
         self.message = message
 
+
 class SMTPLoginError(SMTPException):
     """
     Raised when the client couldn't authenticate to the server.
@@ -87,6 +88,7 @@ class SMTPLoginError(SMTPException):
         exceptions_str = "\n  ".join([str(e) for e in self.exceptions])
 
         return self.message.format(exceptions_str)
+
 
 class SMTPNoRecipientError(SMTPException):
     """
@@ -121,6 +123,7 @@ class SMTPNoRecipientError(SMTPException):
 
         return self.message.format(exceptions_str)
 
+
 class SMTPCommandFailedError(SMTPException):
     """
     Raised when a command fails.
@@ -154,6 +157,7 @@ class SMTPCommandFailedError(SMTPException):
         s = "Command \"{}\" failed : [{}] {}"
 
         return s.format(self.command, self.code, self.message)
+
 
 class SMTPAuthenticationError(SMTPCommandFailedError):
     """

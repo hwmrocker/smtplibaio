@@ -621,7 +621,7 @@ class SMTP:
                 else:
                     break
         else:
-            if not excs:
+            if not errors:
                 err = "Could not find any suitable authentication mechanism."
                 errors.append(SMTPAuthenticationError(-1, err))
 

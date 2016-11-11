@@ -1,4 +1,5 @@
 from .smtp import SMTP
+
 from .exceptions import (
     SMTPException,
     SMTPLoginError,
@@ -8,7 +9,8 @@ from .exceptions import (
 )
 
 __all__ = (
-    'SMTP', 'SMTP_SSL',
+    'SMTP',
+    'SMTP_SSL',
     'SMTPException',
     'SMTPLoginError',
     'SMTPNoRecipientError',
