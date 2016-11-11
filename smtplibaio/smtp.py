@@ -24,16 +24,14 @@ import re
 import socket
 import ssl
 
-from exceptions import (
+from smtplibaio.exceptions import (
     SMTPNoRecipientError,
     SMTPLoginError,
     SMTPAuthenticationError,
     SMTPCommandFailedError,
 )
-from streams import (
-    SMTPStreamReader,
-    SMTPStreamWriter,
-)
+
+from smtplibaio.streams import SMTPStreamReader, SMTPStreamWriter
 
 
 class SMTP:
