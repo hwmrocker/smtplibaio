@@ -7,6 +7,9 @@ from asyncio import StreamReader, StreamWriter
 
 class SMTPStreamReader(StreamReader):
     """
+    StreamReader used to communicate with the server during the SMTP session.
+
+    .. seealso:: `asyncio Streams API <https://docs.python.org/3/library/asyncio-stream.html>`_
     """
     # RFC 2821 § 4.5.3.1 says a line is max. 512 chars long.
     # We chose to support a bit more :o)
@@ -15,6 +18,12 @@ class SMTPStreamReader(StreamReader):
     def __init__(self, limit=line_max_length, loop=None):
         """
         Initializes a new SMTPStreamReader instance.
+
+        Args:
+            limit (int): Maximal length of data that can be returned in bytes,
+                not counting the separator. RFC 2821 specifies this should be
+                512, but the default provided value is 8192.
+            loop (:obj:`asyncio.BaseEventLoop`): Event loop to connect to.
         """
         super().__init__(limit, loop)
 
@@ -71,10 +80,16 @@ class SMTPStreamReader(StreamReader):
 
 class SMTPStreamWriter(StreamWriter):
     """
+    StreamWriter used to communicate with the server during the SMTP session.
+
+    .. seealso:: `asyncio Streams API <https://docs.python.org/3/library/asyncio-stream.html>`_
     """
     async def send_command(self, command):
         """
-        Sends the given command (and parameters, if any) to the server.
+        Sends the given command to the server.
+
+        Args:
+            command (str): Command to send to the server.
 
         Raises:
             ConnectionResetError: If the connection with the server is lost.
