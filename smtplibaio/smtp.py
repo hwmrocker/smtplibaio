@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+usr/bin/env python
 # coding: utf-8
 
 """
@@ -581,9 +581,9 @@ class SMTP:
 
         return code, message
 
-    async def login(self, username, password):
+    async def auth(self, username, password):
         """
-        Logs in to an SMTP server that requires authentication.
+        Tries to authenticate user against the SMTP server.
 
         Args:
             username (str): Username to authenticate with.
