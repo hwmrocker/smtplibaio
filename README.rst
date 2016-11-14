@@ -33,6 +33,23 @@ Example
 
 As you can see, the Asynchronous Context Manager makes it really easy to use.
 
+You can also have a more fine-grained control using the lower-level methods.
+
+Supported SMTP commands
+=======================
+
+* EHLO (``SMTP.ehlo()``) ;
+* HELO (``SMTP.helo()``) ;
+* AUTH (``SMTP.auth()``) (*LOGIN*, *PLAIN* and *CRAM-MD5* mechanisms are suported) ;
+* MAIL FROM (``SMTP.mail()``) ;
+* RCPT TO (``SMTP.rcpt()``) ;
+* VRFY (``SMTP.vrfy()``) ;
+* DATA (``SMTP.data()``) ;
+* EXPN (``SMTP.expn()``) ;
+* NOOP (``SMTP.noop()``) ;
+* QUIT (``SMTP.quit()``) ;
+* HELP (``SMTP.help()``).
+
 Current limitations
 ===================
 
