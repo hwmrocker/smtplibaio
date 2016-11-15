@@ -1,4 +1,4 @@
-usr/bin/env python
+#!/usr/bin/env python
 # coding: utf-8
 
 """
@@ -860,7 +860,7 @@ class SMTP:
 
         decoded_challenge = base64.b64decode(message)
 
-        challenge_hash = hmac.new(key=password.encode('ascii'),
+        challenge_hash = hmac.new(key=password.encode('utf-8'),
                                   msg=decoded_challenge,
                                   digestmod='md5')
 
@@ -1088,7 +1088,7 @@ class SMTP:
         Returns:
             str: A base64-encoded string.
         """
-        return base64.b64encode(s.encode('ascii')).decode('ascii')
+        return base64.b64encode(s.encode('utf-8')).decode('utf-8')
 
     @staticmethod
     def b64dec(b):
@@ -1105,7 +1105,7 @@ class SMTP:
         Returns:
             str: A base64-decoded string.
         """
-        return base64.b64decode(b).decode('ascii')
+        return base64.b64decode(b).decode('utf-8')
 
 
 class SMTP_SSL(SMTP):
