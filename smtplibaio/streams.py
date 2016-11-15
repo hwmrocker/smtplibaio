@@ -95,7 +95,8 @@ class SMTPStreamWriter(StreamWriter):
             ConnectionResetError: If the connection with the server is lost.
             (Shouldn't it raise BrokenPipeError too ?)
         """
-        command = "{}\r\n".format(command).encode('ascii')
+        command = "{}\r\n".format(command).encode('ascii',
+                                                  errors='backslashreplace')
 
         self.write(command)
 
