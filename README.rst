@@ -7,11 +7,13 @@ The smtplibaio package provides an SMTP client session object that can be used t
 Examples
 ========
 
+Let's start with a very basic example, using ``SMTP_SSL``:
+
 .. code-block:: python
     
     import asyncio
     
-    from smtp import SMTP
+    from smtplibaio import SMTP_SSL
     
     
     async def send_email():
@@ -19,10 +21,10 @@ Examples
         """
         from_addr = "bob@example.net"
         to_addr = "alice@example.org"
-    
+        
         message = "Hi Alice !"
-    
-        async with SMTP() as client:
+        
+        async with SMTP_SSL() as client:
             await client.sendmail(from_addr, to_addr, message)
     
     
@@ -33,8 +35,7 @@ Examples
 
 As you can see, the Asynchronous Context Manager makes it really easy to use.
 
-You can also use objects provided by the ``email`` package, available in the
-Python Standard Library (i.e. ``email.message.EmailMessage``):
+In the next example, we are specifying the server hostname and port, we are using authentication and we are using the objects provided by the ``email`` package available in the Python Standard Library (i.e. ``email.message.EmailMessage``) to build a proper email message.
 
 .. code-block:: python
     
@@ -43,19 +44,26 @@ Python Standard Library (i.e. ``email.message.EmailMessage``):
     from email.message import EmailMessage
     from email.headerregistry import Address
     
+    from smtplibaio import SMTP_SSL
+    
     
     async def send_email():
         """
         """
+        # SMTP server:
+        smtp_server = "smtp.example.org"
+        port = 587
+    
         # Credentials used to authenticate:
         username = "alice"
         passwd = "5ecreT!"
     
-        # Use of Address class is not mandatory:
+        # Use of Address object is not mandatory:
         from_addr = str(Address("Alice", "alice", "example.org"))
         to_addr = str(Address("Bob", "bob", "example.net"))
         bcc_addr = str(Address("John", "john", "example.net"))
     
+        # E-mail subject and content:
         subject = "Testing smtplibaio"
         content = "Look, all emails sent from this method are BCCed to John !"
     
@@ -72,7 +80,7 @@ Python Standard Library (i.e. ``email.message.EmailMessage``):
         message.set_content(content)
     
         # Send the e-mail:
-        async with SMTP() as client:
+        async with SMTP_SSL(hostname=smtp_server, port=port) as client:
             await client.auth(username, passwd)
             await client.sendmail(from_addr, recipients, message.as_string())
     
