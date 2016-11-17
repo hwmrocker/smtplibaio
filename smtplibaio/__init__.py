@@ -1,4 +1,4 @@
-from .smtp import SMTP
+from .smtp import SMTP, SMTP_SSL
 
 from .exceptions import (
     SMTPException,
