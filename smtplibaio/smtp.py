@@ -32,6 +32,7 @@ from smtplibaio.exceptions import (
 )
 
 from smtplibaio.streams import SMTPStreamReader, SMTPStreamWriter
+from smtplib import quoteaddr
 
 
 class SMTP:
@@ -477,7 +478,7 @@ class SMTP:
         if options is None:
             options = []
 
-        from_addr = "FROM:<{}>".format(sender)
+        from_addr = "FROM:{}".format(quoteaddr(sender))
         code, message = await self.do_cmd('MAIL', from_addr, *options)
 
         return code, message
@@ -509,7 +510,7 @@ class SMTP:
         if options is None:
             options = []
 
-        to_addr = "TO:<{}>".format(recipient)
+        to_addr = "TO:{}".format(quoteaddr(recipient))
         code, message = await self.do_cmd('RCPT', to_addr, *options)
 
         return code, message
