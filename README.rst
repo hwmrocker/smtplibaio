@@ -59,22 +59,22 @@ In the next example, we are specifying the server hostname and port, we are usin
         passwd = "5ecreT!"
     
         # Use of Address object is not mandatory:
-        from_addr = str(Address("Alice", "alice", "example.org"))
-        to_addr = str(Address("Bob", "bob", "example.net"))
-        bcc_addr = str(Address("John", "john", "example.net"))
+        from_addr = Address("Alice", "alice", "example.org")
+        to_addr = Address("Bob", "bob", "example.net")
+        bcc_addr = Address("John", "john", "example.net")
     
         # E-mail subject and content:
         subject = "Testing smtplibaio"
         content = "Look, all emails sent from this method are BCCed to John !"
     
         # Build the list of recipients (To + Bcc):
-        recipients = [to_addr, bcc_addr]
+        recipients = [to_addr.addr_spec, bcc_addr.addr_spec]
     
         # Build the EmailMessage object:
         message = EmailMessage()
-        message.add_header("From", from_addr)
-        message.add_header("To", to_addr)
-        message.add_header("Bcc", bcc_addr)
+        message.add_header("From", str(from_addr))
+        message.add_header("To", str(to_addr))
+        message.add_header("Bcc", str(bcc_addr))
         message.add_header("Subject", subject)
         message.add_header("Content-type", "text/plain", charset="utf-8")
         message.set_content(content)
@@ -82,7 +82,7 @@ In the next example, we are specifying the server hostname and port, we are usin
         # Send the e-mail:
         async with SMTP_SSL(hostname=smtp_server, port=port) as client:
             await client.auth(username, passwd)
-            await client.sendmail(from_addr, recipients, message.as_string())
+            await client.sendmail(from_addr.addr_spec, recipients, message.as_string())
     
     
     if __name__ == "__main__":
