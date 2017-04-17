@@ -22,7 +22,7 @@ import base64
 import hmac
 import re
 import socket
-import ssl
+import errno
 
 from smtplibaio.exceptions import (
     SMTPNoRecipientError,
@@ -33,6 +33,9 @@ from smtplibaio.exceptions import (
 
 from smtplibaio.streams import SMTPStreamReader, SMTPStreamWriter
 from smtplib import quoteaddr
+
+import OpenSSL
+import aioopenssl
 
 
 class SMTP:
@@ -226,11 +229,15 @@ class SMTP:
             'protocol_factory': lambda: protocol,
             'host': self.hostname,
             'port': self.port,
-            'ssl': self.ssl_context
+            'use_starttls': not self.ssl_context,
+            'ssl_context_factory': lambda transport: self.ssl_context,
+            'server_hostname': self.hostname # For SSL
         }
 
         # This may raise a ConnectionError exception, which we let bubble up.
-        self.transport, _ = await self.loop.create_connection(**conn)
+        self.transport, _ = await aioopenssl.create_starttls_connection(self.loop, **conn)
+        # HACK: aioopenssl transports don't implement is_closing, and thus drain() fails...
+        self.transport.is_closing = lambda: False
 
         # If the connection has been established, build the writer:
         self.writer = SMTPStreamWriter(self.transport, protocol, self.reader,
@@ -640,56 +647,45 @@ class SMTP:
         If the server supports SSL/TLS, this will encrypt the rest of the SMTP
         session.
 
-        .. warning: This method isn't available for now. Please see
-            `issue 23749` for further details.
-
-        .. _`issue 23749`: https://bugs.python.org/issue23749
+        Raises:
+            SMTPCommandNotSupportedError: If the server does not support STARTTLS.
+            SMTPCommandFailedError: If the STARTTLS command fails
 
         Args:
-            context (:obj:`ssl.SSLContext`):
-
-        Raises:
-            NotImplementedError: Always.
+            context (:obj:`OpenSSL.SSL.Context`):
 
         Returns:
             (int, message): A (code, message) 2-tuple containing the server
                 response.
         """
-        # await self.ehlo_or_helo_if_needed()
+        await self.ehlo_or_helo_if_needed()
 
-        # if "starttls" not in self.esmtp_extensions:
-        #     raise SMTPCommandNotSupportedError("STARTTLS not supported.")
+        if "starttls" not in self.esmtp_extensions:
+            raise SMTPCommandNotSupportedError("STARTTLS not supported.")
 
-        # code, message = await self.do_cmd("STARTTLS")
+        code, message = await self.do_cmd("STARTTLS", success=(220,))
+        # Don't check for code, do_cmd did it
 
-        # if code == 220:
-        #     if context is None:
-        #         context = ssl._create_stdlib_context()
+        if context is None:
+            context = OpenSSL.SSL.Context(OpenSSL.SSL.TLSv1_2_METHOD)
 
-        #     # Upgrade reader and writer:
-        #     FIXME: Waiting for a public API to be available.
-        #     See https://bugs.python.org/issue23749 for further details.
-        #     ...
-        #     ...
+        await self.transport.starttls(ssl_context=context)
 
-        #     # RFC 3207:
-        #     # The client MUST discard any knowledge obtained from
-        #     # the server, such as the list of SMTP service extensions,
-        #     # which was not obtained from the TLS negotiation itself.
-        #
-        #     FIXME: wouldn't it be better to use reset_state here ?
-        #     And reset self.reader, self.writer and self.transport just after
-        #     Maybe also self.ssl_context ?
-        #     self.last_ehlo_response = (None, None)
-        #     self.last_helo_response = (None, None)
-        #     self.supports_esmtp = False
-        #     self.esmtp_extensions = {}
-        #     self.auth_mechanisms = []
-        # else:
-        #     raise...
+        # RFC 3207:
+        # The client MUST discard any knowledge obtained from
+        # the server, such as the list of SMTP service extensions,
+        # which was not obtained from the TLS negotiation itself.
 
-        # return (code, message)
-        raise NotImplementedError()
+        # FIXME: wouldn't it be better to use reset_state here ?
+        # And reset self.reader, self.writer and self.transport just after
+        # Maybe also self.ssl_context ?
+        self.last_ehlo_response = (None, None)
+        self.last_helo_response = (None, None)
+        self.supports_esmtp = False
+        self.esmtp_extensions = {}
+        self.auth_mechanisms = []
+
+        return (code, message)
 
     async def sendmail(self, sender, recipients, message, mail_options=None,
                        rcpt_options=None):
@@ -818,7 +814,11 @@ class SMTP:
         """
         if self.writer is not None:
             # Close the transport:
-            self.writer.close()
+            try:
+                self.writer.close()
+            except OSError as exc:
+                if exc.errno != errno.ENOTCONN:
+                    raise
 
         self.reset_state()
 
@@ -1114,7 +1114,7 @@ class SMTP_SSL(SMTP):
     SMTP or ESMTP client over an SSL channel.
 
     Attributes:
-        ssl_context (:class:`ssl.SSLContext`): SSL context to use to establish
+        ssl_context (:class:`OpenSSL.SSL.Context`): SSL context to use to establish
             the connection with the SMTP server.
 
     .. seealso: :class:`SMTP`
@@ -1136,9 +1136,6 @@ class SMTP_SSL(SMTP):
         super().__init__(hostname, port, fqdn, timeout)
 
         if context is None:
-            # By default, this creates a :class:`ssl.SSLContext` instance with
-            # purpose set to ```ssl.Purpose.SERVER_AUTH``, which is what we
-            # want.
-            context = ssl.create_default_context()
+            context = OpenSSL.SSL.Context(OpenSSL.SSL.TLSv1_2_METHOD)
 
         self.ssl_context = context

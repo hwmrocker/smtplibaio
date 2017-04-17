@@ -111,5 +111,4 @@ Supported SMTP commands
 Current limitations
 ===================
 
-* STARTTLS is not supported yet,
 * There is no direct support for Python's ``email.message.EmailMessage``. You can still use ``email.message.EmailMessage.as_string()`` or ``str(email.message.EmailMessage)`` instead. See the example above for further details.
