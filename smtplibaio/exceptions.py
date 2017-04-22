@@ -19,6 +19,8 @@ package is as follows:
           |       |
           |       + SMTPAuthenticationError
           |
+          + BadImplementationError
+          |
           + OSError
               |
               + ConnectionError
@@ -31,6 +33,12 @@ what exceptions a method can raise by reading the method docstring.
 
 Please feel free to make a PR if we missed something.
 """
+
+
+class BadImplementationError(Exception):
+    """
+    Trying to use STARTTLS with a connection using the regular ssl module.
+    """
 
 
 class SMTPException(Exception):

@@ -22,6 +22,7 @@ import base64
 import hmac
 import re
 import socket
+import ssl
 import errno
 
 from smtplibaio.exceptions import (
@@ -29,13 +30,11 @@ from smtplibaio.exceptions import (
     SMTPLoginError,
     SMTPAuthenticationError,
     SMTPCommandFailedError,
+    BadImplementationError
 )
 
 from smtplibaio.streams import SMTPStreamReader, SMTPStreamWriter
 from smtplib import quoteaddr
-
-import OpenSSL
-import aioopenssl
 
 
 class SMTP:
@@ -67,6 +66,8 @@ class SMTP:
         transport (:class:`asyncio.BaseTransport`): Communication channel
             abstraction between client and server.
         loop (:class:`asyncio.BaseEventLoop`): Event loop to use.
+        use_aioopenssl (bool): If True, the connection is made using the
+            aioopenssl module. Defaults to False.
         _fqdn (str): Client FQDN. Used to identify the client to the
             server.
 
@@ -90,7 +91,8 @@ class SMTP:
     }
 
     def __init__(self, hostname='localhost', port=_default_port, fqdn=None,
-                 timeout=socket._GLOBAL_DEFAULT_TIMEOUT, loop=None):
+                 timeout=socket._GLOBAL_DEFAULT_TIMEOUT, loop=None,
+                 use_aioopenssl=False):
         """
         Initializes a new :class:`SMTP` instance.
 
@@ -101,6 +103,9 @@ class SMTP:
                 used to identify the client to the server.
             timeout (int): Not used.
             loop (:class:`asyncio.BaseEventLoop`): Event loop to use.
+            use_aioopenssl (bool): Use the aioopenssl module to open
+                the connection. This is mandatory if you plan on using
+                STARTTLS.
         """
         self.hostname = hostname
 
@@ -112,6 +117,7 @@ class SMTP:
         self.timeout = timeout
         self._fqdn = fqdn
         self.loop = loop or asyncio.get_event_loop()
+        self.use_aioopenssl = use_aioopenssl
 
         self.reset_state()
 
@@ -229,15 +235,24 @@ class SMTP:
             'protocol_factory': lambda: protocol,
             'host': self.hostname,
             'port': self.port,
-            'use_starttls': not self.ssl_context,
-            'ssl_context_factory': lambda transport: self.ssl_context,
-            'server_hostname': self.hostname # For SSL
         }
 
-        # This may raise a ConnectionError exception, which we let bubble up.
-        self.transport, _ = await aioopenssl.create_starttls_connection(self.loop, **conn)
-        # HACK: aioopenssl transports don't implement is_closing, and thus drain() fails...
-        self.transport.is_closing = lambda: False
+        if self.use_aioopenssl:
+            conn.update({
+                'use_starttls': not self.ssl_context,
+                'ssl_context_factory': lambda transport: self.ssl_context,
+                'server_hostname': self.hostname # For SSL
+                })
+
+            import aioopenssl
+            # This may raise a ConnectionError exception, which we let bubble up.
+            self.transport, _ = await aioopenssl.create_starttls_connection(self.loop, **conn)
+            # HACK: aioopenssl transports don't implement is_closing, and thus drain() fails...
+            self.transport.is_closing = lambda: False
+        else:
+            conn['ssl'] = self.ssl_context
+            # This may raise a ConnectionError exception, which we let bubble up.
+            self.transport, _ = await self.loop.create_connection(**conn)
 
         # If the connection has been established, build the writer:
         self.writer = SMTPStreamWriter(self.transport, protocol, self.reader,
@@ -650,14 +665,21 @@ class SMTP:
         Raises:
             SMTPCommandNotSupportedError: If the server does not support STARTTLS.
             SMTPCommandFailedError: If the STARTTLS command fails
+            BadImplementationError: If the connection does not use aioopenssl.
 
         Args:
-            context (:obj:`OpenSSL.SSL.Context`):
+            context (:obj:`OpenSSL.SSL.Context`): SSL context
 
         Returns:
             (int, message): A (code, message) 2-tuple containing the server
                 response.
         """
+        if not self.use_aioopenssl:
+            raise BadImplementationError('This connection does not use aioopenssl')
+
+        import aioopenssl
+        import OpenSSL
+
         await self.ehlo_or_helo_if_needed()
 
         if "starttls" not in self.esmtp_extensions:
@@ -1122,7 +1144,8 @@ class SMTP_SSL(SMTP):
     _default_port = 465
 
     def __init__(self, hostname='localhost', port=_default_port, fqdn=None,
-                 context=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+                 context=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+                 use_aioopenssl=False):
         """
         Initializes a new :class:`SMTP_SSL` instance.
 
@@ -1133,9 +1156,13 @@ class SMTP_SSL(SMTP):
 
         .. seealso:: :meth:`SMTP.__init__`
         """
-        super().__init__(hostname, port, fqdn, timeout)
+        super().__init__(hostname, port, fqdn, timeout, use_aioopenssl=use_aioopenssl)
 
         if context is None:
-            context = OpenSSL.SSL.Context(OpenSSL.SSL.TLSv1_2_METHOD)
+            if use_aioopenssl:
+                import OpenSSL
+                context = OpenSSL.SSL.Context(OpenSSL.SSL.TLSv1_2_METHOD)
+            else:
+                context = ssl.create_default_context()
 
         self.ssl_context = context
