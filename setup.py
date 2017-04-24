@@ -5,14 +5,14 @@ setup(
         'smtplibaio',
     ],
 
-    version='2.0.2',
+    version='2.1.0',
     description='An async version of smtplib',
 
     author='Olaf Gladis',
     author_email='github@gladis.org',
 
     url='https://github.com/hwmrocker/smtplibaio',
-    download_url='https://github.com/hwmrocker/smtplibaio/tarball/2.0.2',
+    download_url='https://github.com/hwmrocker/smtplibaio/tarball/2.1.0',
 
     keywords=['smtplib', 'asyncio'],
 
