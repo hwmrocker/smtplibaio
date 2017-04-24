@@ -35,6 +35,35 @@ Let's start with a very basic example, using ``SMTP_SSL``:
 
 As you can see, the Asynchronous Context Manager makes it really easy to use.
 
+STARTTLS is supported only if you have the ``aioopenssl`` module
+installed. You must tell ``SMTP`` to use it upon instantiation:
+
+.. code-block:: python
+    
+    import asyncio
+    
+    from smtplibaio import SMTP
+    
+    
+    async def send_email():
+        """
+        """
+        from_addr = "bob@example.net"
+        to_addr = "alice@example.org"
+        
+        message = "Hi Alice !"
+        
+        async with SMTP(use_aioopenssl=True) as client:
+	    await client.starttls()
+            await client.sendmail(from_addr, to_addr, message)
+    
+    
+    if __name__ == '__main__':
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(send_email())
+        loop.close()
+
+
 In the next example, we are specifying the server hostname and port, we are using authentication and we are using the objects provided by the ``email`` package available in the Python Standard Library (i.e. ``email.message.EmailMessage``) to build a proper email message.
 
 .. code-block:: python
@@ -98,6 +127,7 @@ Supported SMTP commands
 
 * EHLO - ``SMTP.ehlo()`` ;
 * HELO - ``SMTP.helo()`` ;
+* STARTTLS - ``SMTP.starttls()`` (depending on aioopenssl availability) ;
 * AUTH - ``SMTP.auth()`` (*LOGIN*, *PLAIN* and *CRAM-MD5* mechanisms are suported) ;
 * MAIL FROM - ``SMTP.mail()`` ;
 * RCPT TO - ``SMTP.rcpt()`` ;
@@ -111,5 +141,4 @@ Supported SMTP commands
 Current limitations
 ===================
 
-* STARTTLS is not supported yet,
 * There is no direct support for Python's ``email.message.EmailMessage``. You can still use ``email.message.EmailMessage.as_string()`` or ``str(email.message.EmailMessage)`` instead. See the example above for further details.

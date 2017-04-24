@@ -22,4 +22,8 @@ setup(
         'Programming Language :: Python :: 3.5',
         "Topic :: Communications :: Email",
     ],
+
+    setup_requires=[
+        'aioopenssl',
+    ],
 )
