@@ -1145,7 +1145,7 @@ class SMTP_SSL(SMTP):
 
     def __init__(self, hostname='localhost', port=_default_port, fqdn=None,
                  context=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
-                 use_aioopenssl=False):
+                 loop=None, use_aioopenssl=False):
         """
         Initializes a new :class:`SMTP_SSL` instance.
 
@@ -1156,7 +1156,8 @@ class SMTP_SSL(SMTP):
 
         .. seealso:: :meth:`SMTP.__init__`
         """
-        super().__init__(hostname, port, fqdn, timeout, use_aioopenssl=use_aioopenssl)
+        super().__init__(hostname=hostname, port=port, fqdn=fqdn, timeout=timeout,
+         use_aioopenssl=use_aioopenssl, loop=loop)
 
         if context is None:
             if use_aioopenssl:
