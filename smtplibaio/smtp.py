@@ -19,22 +19,22 @@ SMTP/ESMTP client class.
 
 import asyncio
 import base64
+import errno
 import hmac
 import re
 import socket
 import ssl
-import errno
+from smtplib import quoteaddr
 
 from smtplibaio.exceptions import (
-    SMTPNoRecipientError,
-    SMTPLoginError,
+    BadImplementationError,
     SMTPAuthenticationError,
     SMTPCommandFailedError,
-    BadImplementationError,
+    SMTPCommandNotSupportedError,
+    SMTPLoginError,
+    SMTPNoRecipientError,
 )
-
 from smtplibaio.streams import SMTPStreamReader, SMTPStreamWriter
-from smtplib import quoteaddr
 
 
 class SMTP:
@@ -694,7 +694,7 @@ class SMTP:
         await self.ehlo_or_helo_if_needed()
 
         if "starttls" not in self.esmtp_extensions:
-            raise SMTPCommandNotSupportedError("STARTTLS not supported.")
+            raise SMTPCommandNotSupportedError("STARTTLS")
 
         code, message = await self.do_cmd("STARTTLS", success=(220,))
         # Don't check for code, do_cmd did it

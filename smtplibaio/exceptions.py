@@ -13,6 +13,7 @@ package is as follows:
           |
           + SMTPException
           |   |
+          |   + SMTPCommandNotSupportedError
           |   + SMTPLoginError
           |   + SMTPNoRecipientError
           |   + SMTPCommandFailedError
@@ -67,6 +68,31 @@ class SMTPException(Exception):
         self.message = message
 
 
+class SMTPCommandNotSupportedError(SMTPException):
+    """
+    Raised when a command is not supported.
+
+    Attributes:
+        command (str): Command that is not supported
+
+    Inherited attributes:
+        message (str): Exception message, ideally providing help for the user.
+    """
+
+    def __init__(self, command):
+        """
+        Initializes a new instance of SMTPCommandNotSupportedError.
+
+        Args:
+            command (str): Command that is not supported
+        """
+        super().__init__("Command not supported:\n  {}")
+        self.command = command
+
+    def __str__(self):
+        return self.message.format(self.command)
+
+
 class SMTPLoginError(SMTPException):
     """
     Raised when the client couldn't authenticate to the server.
@@ -77,7 +103,7 @@ class SMTPLoginError(SMTPException):
             being raised.
 
     Inherited attributes:
-        message: (str): Exception message, ideally providing help for the user.
+        message (str): Exception message, ideally providing help for the user.
     """
 
     def __init__(self, excs):
