@@ -30,7 +30,7 @@ from smtplibaio.exceptions import (
     SMTPLoginError,
     SMTPAuthenticationError,
     SMTPCommandFailedError,
-    BadImplementationError
+    BadImplementationError,
 )
 
 from smtplibaio.streams import SMTPStreamReader, SMTPStreamWriter
@@ -82,17 +82,24 @@ class SMTP:
                 - The name of the method to call to authenticate using the
                   mechanism.
     """
+
     _default_port = 25
 
     _supported_auth_mechanisms = {
-        'cram-md5': '_auth_cram_md5',
-        'plain': '_auth_plain',
-        'login': '_auth_login',
+        "cram-md5": "_auth_cram_md5",
+        "plain": "_auth_plain",
+        "login": "_auth_login",
     }
 
-    def __init__(self, hostname='localhost', port=_default_port, fqdn=None,
-                 timeout=socket._GLOBAL_DEFAULT_TIMEOUT, loop=None,
-                 use_aioopenssl=False):
+    def __init__(
+        self,
+        hostname="localhost",
+        port=_default_port,
+        fqdn=None,
+        timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+        loop=None,
+        use_aioopenssl=False,
+    ):
         """
         Initializes a new :class:`SMTP` instance.
 
@@ -142,11 +149,11 @@ class SMTP:
             # Let's try to retrieve it:
             self._fqdn = socket.getfqdn()
 
-            if '.' not in self._fqdn:
+            if "." not in self._fqdn:
                 try:
-                    info = socket.getaddrinfo(host='localhost',
-                                              port=None,
-                                              proto=socket.IPPROTO_TCP)
+                    info = socket.getaddrinfo(
+                        host="localhost", port=None, proto=socket.IPPROTO_TCP
+                    )
                 except socket.gaierror:
                     addr = "127.0.0.1"
                 else:
@@ -232,31 +239,35 @@ class SMTP:
         # With the just-built reader and protocol, create the connection and
         # get the transport stream:
         conn = {
-            'protocol_factory': lambda: protocol,
-            'host': self.hostname,
-            'port': self.port,
+            "protocol_factory": lambda: protocol,
+            "host": self.hostname,
+            "port": self.port,
         }
 
         if self.use_aioopenssl:
-            conn.update({
-                'use_starttls': not self.ssl_context,
-                'ssl_context_factory': lambda transport: self.ssl_context,
-                'server_hostname': self.hostname # For SSL
-                })
+            conn.update(
+                {
+                    "use_starttls": not self.ssl_context,
+                    "ssl_context_factory": lambda transport: self.ssl_context,
+                    "server_hostname": self.hostname,  # For SSL
+                }
+            )
 
             import aioopenssl
+
             # This may raise a ConnectionError exception, which we let bubble up.
-            self.transport, _ = await aioopenssl.create_starttls_connection(self.loop, **conn)
+            self.transport, _ = await aioopenssl.create_starttls_connection(
+                self.loop, **conn
+            )
             # HACK: aioopenssl transports don't implement is_closing, and thus drain() fails...
             self.transport.is_closing = lambda: False
         else:
-            conn['ssl'] = self.ssl_context
+            conn["ssl"] = self.ssl_context
             # This may raise a ConnectionError exception, which we let bubble up.
             self.transport, _ = await self.loop.create_connection(**conn)
 
         # If the connection has been established, build the writer:
-        self.writer = SMTPStreamWriter(self.transport, protocol, self.reader,
-                                       self.loop)
+        self.writer = SMTPStreamWriter(self.transport, protocol, self.reader, self.loop)
 
         code, message = await self.reader.read_reply()
 
@@ -320,7 +331,7 @@ class SMTP:
         if from_host is None:
             from_host = self.fqdn
 
-        code, message = await self.do_cmd('HELO', from_host)
+        code, message = await self.do_cmd("HELO", from_host)
 
         self.last_helo_response = (code, message)
 
@@ -352,7 +363,7 @@ class SMTP:
         if from_host is None:
             from_host = self.fqdn
 
-        code, message = await self.do_cmd('EHLO', from_host)
+        code, message = await self.do_cmd("EHLO", from_host)
 
         self.last_ehlo_response = (code, message)
 
@@ -385,9 +396,9 @@ class SMTP:
         .. _`RFC 5321 § 4.1.1.8`: https://tools.ietf.org/html/rfc5321#section-4.1.1.8
         """
         if command_name is None:
-            command_name = ''
+            command_name = ""
 
-        code, message = await self.do_cmd('HELP', command_name)
+        code, message = await self.do_cmd("HELP", command_name)
 
         return message
 
@@ -408,7 +419,7 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.5`: https://tools.ietf.org/html/rfc5321#section-4.1.1.5
         """
-        return await self.do_cmd('RSET')
+        return await self.do_cmd("RSET")
 
     async def noop(self):
         """
@@ -427,7 +438,7 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.9`: https://tools.ietf.org/html/rfc5321#section-4.1.1.9
         """
-        return await self.do_cmd('NOOP')
+        return await self.do_cmd("NOOP")
 
     async def vrfy(self, address):
         """
@@ -449,7 +460,7 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.6`: https://tools.ietf.org/html/rfc5321#section-4.1.1.6
         """
-        return await self.do_cmd('VRFY', address)
+        return await self.do_cmd("VRFY", address)
 
     async def expn(self, address):
         """
@@ -471,7 +482,7 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.7`: https://tools.ietf.org/html/rfc5321#section-4.1.1.7
         """
-        return await self.do_cmd('EXPN', address)
+        return await self.do_cmd("EXPN", address)
 
     async def mail(self, sender, options=None):
         """
@@ -501,7 +512,7 @@ class SMTP:
             options = []
 
         from_addr = "FROM:{}".format(quoteaddr(sender))
-        code, message = await self.do_cmd('MAIL', from_addr, *options)
+        code, message = await self.do_cmd("MAIL", from_addr, *options)
 
         return code, message
 
@@ -533,7 +544,7 @@ class SMTP:
             options = []
 
         to_addr = "TO:{}".format(quoteaddr(recipient))
-        code, message = await self.do_cmd('RCPT', to_addr, *options)
+        code, message = await self.do_cmd("RCPT", to_addr, *options)
 
         return code, message
 
@@ -554,7 +565,7 @@ class SMTP:
         message = None
 
         try:
-            code, message = await self.do_cmd('QUIT')
+            code, message = await self.do_cmd("QUIT")
         except ConnectionError:
             # We voluntarily ignore this kind of exceptions since... the
             # connection seems already closed.
@@ -593,12 +604,12 @@ class SMTP:
 
         .. _`RFC 5321 § 4.1.1.4`: https://tools.ietf.org/html/rfc5321#section-4.1.1.4
         """
-        code, message = await self.do_cmd('DATA', success=(354,))
+        code, message = await self.do_cmd("DATA", success=(354,))
 
         email_message = SMTP.prepare_message(email_message)
 
-        self.writer.write(email_message)    # write is non-blocking.
-        await self.writer.drain()           # don't forget to drain.
+        self.writer.write(email_message)  # write is non-blocking.
+        await self.writer.drain()  # don't forget to drain.
 
         code, message = await self.reader.read_reply()
 
@@ -628,7 +639,7 @@ class SMTP:
         # EHLO/HELO is required:
         await self.ehlo_or_helo_if_needed()
 
-        errors = []   # To store SMTPAuthenticationErrors
+        errors = []  # To store SMTPAuthenticationErrors
         code = message = None
 
         # Try to authenticate using all mechanisms supported by both
@@ -675,7 +686,7 @@ class SMTP:
                 response.
         """
         if not self.use_aioopenssl:
-            raise BadImplementationError('This connection does not use aioopenssl')
+            raise BadImplementationError("This connection does not use aioopenssl")
 
         import aioopenssl
         import OpenSSL
@@ -709,8 +720,9 @@ class SMTP:
 
         return (code, message)
 
-    async def sendmail(self, sender, recipients, message, mail_options=None,
-                       rcpt_options=None):
+    async def sendmail(
+        self, sender, recipients, message, mail_options=None, rcpt_options=None
+    ):
         """
         Performs an entire e-mail transaction.
 
@@ -797,13 +809,15 @@ class SMTP:
         # If we got here then somebody got our mail:
         return errors
 
-    async def send_mail(self, sender, recipients, message, mail_options=None,
-                        rcpt_options=None):
+    async def send_mail(
+        self, sender, recipients, message, mail_options=None, rcpt_options=None
+    ):
         """
         Alias for :meth:`SMTP.sendmail`.
         """
-        return await self.sendmail(sender, recipients, message,
-                                   mail_options, rcpt_options)
+        return await self.sendmail(
+            sender, recipients, message, mail_options, rcpt_options
+        )
 
     async def ehlo_or_helo_if_needed(self):
         """
@@ -877,23 +891,22 @@ class SMTP:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
         """
-        mechanism = 'CRAM-MD5'
+        mechanism = "CRAM-MD5"
 
-        code, message = await self.do_cmd('AUTH', mechanism, success=(334,))
+        code, message = await self.do_cmd("AUTH", mechanism, success=(334,))
 
         decoded_challenge = base64.b64decode(message)
 
-        challenge_hash = hmac.new(key=password.encode('utf-8'),
-                                  msg=decoded_challenge,
-                                  digestmod='md5')
+        challenge_hash = hmac.new(
+            key=password.encode("utf-8"), msg=decoded_challenge, digestmod="md5"
+        )
 
         hex_hash = challenge_hash.hexdigest()
         response = "{} {}".format(username, hex_hash)
         encoded_response = SMTP.b64enc(response)
 
         try:
-            code, message = await self.do_cmd(encoded_response,
-                                              success=(235, 503))
+            code, message = await self.do_cmd(encoded_response, success=(235, 503))
         except SMTPCommandFailedError as e:
             raise SMTPAuthenticationError(e.code, e.message, mechanism)
 
@@ -927,15 +940,14 @@ class SMTP:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
         """
-        mechanism = 'LOGIN'
+        mechanism = "LOGIN"
 
-        code, message = await self.do_cmd('AUTH', mechanism,
-                                          SMTP.b64enc(username),
-                                          success=(334,))
+        code, message = await self.do_cmd(
+            "AUTH", mechanism, SMTP.b64enc(username), success=(334,)
+        )
 
         try:
-            code, message = await self.do_cmd(SMTP.b64enc(password),
-                                              success=(235, 503))
+            code, message = await self.do_cmd(SMTP.b64enc(password), success=(235, 503))
         except SMTPCommandFailedError as e:
             raise SMTPAuthenticationError(e.code, e.message, mechanism)
 
@@ -968,15 +980,15 @@ class SMTP:
             (int, str): A (code, message) 2-tuple containing the server
                 response.
         """
-        mechanism = 'PLAIN'
+        mechanism = "PLAIN"
 
         credentials = "\0{}\0{}".format(username, password)
         encoded_credentials = SMTP.b64enc(credentials)
 
         try:
-            code, message = await self.do_cmd('AUTH', mechanism,
-                                              encoded_credentials,
-                                              success=(235, 503))
+            code, message = await self.do_cmd(
+                "AUTH", mechanism, encoded_credentials, success=(235, 503)
+            )
         except SMTPCommandFailedError as e:
             raise SMTPAuthenticationError(e.code, e.message, mechanism)
 
@@ -1001,8 +1013,9 @@ class SMTP:
 
         oldstyle_auth_regex = re.compile(r"auth=(?P<auth>.*)", re.IGNORECASE)
 
-        extension_regex = re.compile(r"(?P<feature>[a-z0-9][a-z0-9\-]*) ?",
-                                     re.IGNORECASE)
+        extension_regex = re.compile(
+            r"(?P<feature>[a-z0-9][a-z0-9\-]*) ?", re.IGNORECASE
+        )
 
         lines = message.splitlines()
 
@@ -1026,14 +1039,12 @@ class SMTP:
 
             if match:
                 feature = match.group("feature").lower()
-                params = match.string[match.end("feature"):].strip()
+                params = match.string[match.end("feature") :].strip()
 
                 extns[feature] = params
 
                 if feature == "auth":
-                    auths.extend([param.strip().lower()
-                                  for param
-                                  in params.split()])
+                    auths.extend([param.strip().lower() for param in params.split()])
 
         return extns, auths
 
@@ -1111,7 +1122,7 @@ class SMTP:
         Returns:
             str: A base64-encoded string.
         """
-        return base64.b64encode(s.encode('utf-8')).decode('utf-8')
+        return base64.b64encode(s.encode("utf-8")).decode("utf-8")
 
     @staticmethod
     def b64dec(b):
@@ -1128,7 +1139,7 @@ class SMTP:
         Returns:
             str: A base64-decoded string.
         """
-        return base64.b64decode(b).decode('utf-8')
+        return base64.b64decode(b).decode("utf-8")
 
 
 class SMTP_SSL(SMTP):
@@ -1141,11 +1152,19 @@ class SMTP_SSL(SMTP):
 
     .. seealso: :class:`SMTP`
     """
+
     _default_port = 465
 
-    def __init__(self, hostname='localhost', port=_default_port, fqdn=None,
-                 context=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
-                 loop=None, use_aioopenssl=False):
+    def __init__(
+        self,
+        hostname="localhost",
+        port=_default_port,
+        fqdn=None,
+        context=None,
+        timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+        loop=None,
+        use_aioopenssl=False,
+    ):
         """
         Initializes a new :class:`SMTP_SSL` instance.
 
@@ -1156,12 +1175,19 @@ class SMTP_SSL(SMTP):
 
         .. seealso:: :meth:`SMTP.__init__`
         """
-        super().__init__(hostname=hostname, port=port, fqdn=fqdn, timeout=timeout,
-         use_aioopenssl=use_aioopenssl, loop=loop)
+        super().__init__(
+            hostname=hostname,
+            port=port,
+            fqdn=fqdn,
+            timeout=timeout,
+            use_aioopenssl=use_aioopenssl,
+            loop=loop,
+        )
 
         if context is None:
             if use_aioopenssl:
                 import OpenSSL
+
                 context = OpenSSL.SSL.Context(OpenSSL.SSL.TLSv1_2_METHOD)
             else:
                 context = ssl.create_default_context()

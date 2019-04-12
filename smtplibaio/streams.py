@@ -11,6 +11,7 @@ class SMTPStreamReader(StreamReader):
 
     .. seealso:: `asyncio Streams API <https://docs.python.org/3/library/asyncio-stream.html>`_
     """
+
     # RFC 2821 § 4.5.3.1 says a line is max. 512 chars long.
     # We chose to support a bit more :o)
     line_max_length = 8192
@@ -65,12 +66,12 @@ class SMTPStreamReader(StreamReader):
                     # - Got an empty line (connection is probably down),
                     # - Got a line without a valid return code.
                     # In both case, it shouldn't happen, hence:
-                    raise ConnectionResetError('Connection lost.') from e
+                    raise ConnectionResetError("Connection lost.") from e
                 else:
                     # Check is we have a multiline response:
-                    go_on = (line[3:4] == b'-')
+                    go_on = line[3:4] == b"-"
 
-            message = line[4:].strip(b' \t\r\n').decode('ascii')
+            message = line[4:].strip(b" \t\r\n").decode("ascii")
             messages.append(message)
 
         full_message = "\n".join(messages)
@@ -84,6 +85,7 @@ class SMTPStreamWriter(StreamWriter):
 
     .. seealso:: `asyncio Streams API <https://docs.python.org/3/library/asyncio-stream.html>`_
     """
+
     async def send_command(self, command):
         """
         Sends the given command to the server.
@@ -95,8 +97,7 @@ class SMTPStreamWriter(StreamWriter):
             ConnectionResetError: If the connection with the server is lost.
             (Shouldn't it raise BrokenPipeError too ?)
         """
-        command = "{}\r\n".format(command).encode('ascii',
-                                                  errors='backslashreplace')
+        command = "{}\r\n".format(command).encode("ascii", errors="backslashreplace")
 
         self.write(command)
 

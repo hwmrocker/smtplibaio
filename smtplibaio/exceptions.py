@@ -52,6 +52,7 @@ class SMTPException(Exception):
         subclass it or use one of the existing subclasses provided in this
         module.
     """
+
     def __init__(self, message=None):
         """
         Initializes a new instance of SMTPException.
@@ -78,6 +79,7 @@ class SMTPLoginError(SMTPException):
     Inherited attributes:
         message: (str): Exception message, ideally providing help for the user.
     """
+
     def __init__(self, excs):
         """
         Initializes a new instance of SMTPLoginError.
@@ -112,6 +114,7 @@ class SMTPNoRecipientError(SMTPException):
 
     .. seealso:: :meth:`sendmail` source code.
     """
+
     def __init__(self, excs):
         """
         Initializes a new instance of SMTPNoRecipientError.
@@ -144,6 +147,7 @@ class SMTPCommandFailedError(SMTPException):
         message (str): Exception message, ideally providing help for the user.
         code (int): Error code returned by the SMTP server.
     """
+
     def __init__(self, code, message=None, command=None):
         """
         Initializes a new instance of SMTPCommandFailedError.
@@ -162,7 +166,7 @@ class SMTPCommandFailedError(SMTPException):
     def __str__(self):
         """
         """
-        s = "Command \"{}\" failed : [{}] {}"
+        s = 'Command "{}" failed : [{}] {}'
 
         return s.format(self.command, self.code, self.message)
 
@@ -180,6 +184,7 @@ class SMTPAuthenticationError(SMTPCommandFailedError):
         command (str): Command sent to the server that originated the
             exception.
    """
+
     def __init__(self, code, message=None, mechanism=None):
         """
         """

@@ -5,15 +5,15 @@ from .exceptions import (
     SMTPLoginError,
     SMTPNoRecipientError,
     SMTPCommandFailedError,
-    SMTPAuthenticationError
+    SMTPAuthenticationError,
 )
 
 __all__ = (
-    'SMTP',
-    'SMTP_SSL',
-    'SMTPException',
-    'SMTPLoginError',
-    'SMTPNoRecipientError',
-    'SMTPCommandFailedError',
-    'SMTPAuthenticationError'
+    "SMTP",
+    "SMTP_SSL",
+    "SMTPException",
+    "SMTPLoginError",
+    "SMTPNoRecipientError",
+    "SMTPCommandFailedError",
+    "SMTPAuthenticationError",
 )
