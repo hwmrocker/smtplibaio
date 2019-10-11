@@ -5,23 +5,11 @@ from email.message import EmailMessage
 
 import pytest
 
-from smtplibaio import SMTP
-
-
-def get_output(q):
-    output = []
-    while True:
-        try:
-            output.append(q.get(block=False))
-        except queue.Empty:
-            return ''.join(output)
-
-        time.sleep(0.1)
+from context import SMTP
 
 
 @pytest.mark.asyncio
-async def test_smtp(smtp_test_server):
-    queue, port = smtp_test_server
+async def test_smtp(smtp_controller):
     from_addr = Address("Alice", "alice", "example.org")
     to_addr = Address("Bob", "bob", "example.net")
     bcc_addr = Address("John", "john", "example.net")
@@ -35,22 +23,21 @@ async def test_smtp(smtp_test_server):
     message.add_header("Subject", subject)
     message.add_header("Content-type", "text/plain", charset="utf-8")
     message.set_content(content)
-    async with SMTP(port=port) as client:
+    async with SMTP(
+        hostname=smtp_controller.hostname, port=smtp_controller.port
+    ) as client:
         await client.sendmail(from_addr.addr_spec, recipients, message.as_string())
 
-    output = get_output(queue)
-    expected = '\n'.join([
-        '---------- MESSAGE FOLLOWS ----------',
-        "b'From: Alice <alice@example.org>'",
-        "b'To: Bob <bob@example.net>'",
-        "b'Bcc: John <john@example.net>'",
-        "b'Subject: Testing smtplibaio'",
-        'b\'Content-Type: text/plain; charset="utf-8"\'',
-        "b'Content-Transfer-Encoding: 7bit'",
-        "b'MIME-Version: 1.0'",
-        "b'X-Peer: 127.0.0.1'",
-        "b''",
-        "b'Look, all emails sent from this method are BCCed to John !'",
-        '------------ END MESSAGE ------------'])
+    output = smtp_controller.handler.content.strip().replace("\r\n", "\n")
+    expected = """\
+From: Alice <alice@example.org>
+To: Bob <bob@example.net>
+Bcc: John <john@example.net>
+Subject: Testing smtplibaio
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
 
-    assert output.strip().rstrip() == expected
+Look, all emails sent from this method are BCCed to John !"""
+
+    assert output == expected
