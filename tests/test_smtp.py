@@ -7,37 +7,21 @@ import pytest
 
 from context import SMTP
 
+test_message = """\
+From: Alice <alice@example.org>\r
+To: Bob <bob@example.org>\r
+Subject: test for smtplibaio\r
+\r
+this is the email body :)"""
+
 
 @pytest.mark.asyncio
 async def test_smtp(smtp_controller):
-    from_addr = Address("Alice", "alice", "example.org")
-    to_addr = Address("Bob", "bob", "example.net")
-    bcc_addr = Address("John", "john", "example.net")
-    subject = "Testing smtplibaio"
-    content = "Look, all emails sent from this method are BCCed to John !"
-    recipients = [to_addr.addr_spec, bcc_addr.addr_spec]
-    message = EmailMessage()
-    message.add_header("From", str(from_addr))
-    message.add_header("To", str(to_addr))
-    message.add_header("Bcc", str(bcc_addr))
-    message.add_header("Subject", subject)
-    message.add_header("Content-type", "text/plain", charset="utf-8")
-    message.set_content(content)
     async with SMTP(
         hostname=smtp_controller.hostname, port=smtp_controller.port
     ) as client:
-        await client.sendmail(from_addr.addr_spec, recipients, message.as_string())
+        await client.sendmail("alice@example.com", ["bob@example.com"], test_message)
 
-    output = smtp_controller.handler.content.strip().replace("\r\n", "\n")
-    expected = """\
-From: Alice <alice@example.org>
-To: Bob <bob@example.net>
-Bcc: John <john@example.net>
-Subject: Testing smtplibaio
-Content-Type: text/plain; charset="utf-8"
-Content-Transfer-Encoding: 7bit
-MIME-Version: 1.0
+    output = smtp_controller.handler.content.strip()
 
-Look, all emails sent from this method are BCCed to John !"""
-
-    assert output == expected
+    assert output == test_message
