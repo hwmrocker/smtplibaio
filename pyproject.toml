@@ -1,10 +1,10 @@
 [tool.poetry]
 name = "smtplibaio"
-version = "2.1.2"
+version = "2.1.2.post1"
 description = "An async version of smtplib"
 authors = ["Olaf Gladis <github@gladis.org>"]
 license = "MIT"
-readme = "README.rst"
+readme = "README.md"
 homepage = "https://github.com/hwmrocker/smtplibaio"
 repository = "https://github.com/hwmrocker/smtplibaio"
 # classifiers = [

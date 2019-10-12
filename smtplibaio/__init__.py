@@ -1,12 +1,11 @@
-from .smtp import SMTP, SMTP_SSL
-
 from .exceptions import (
+    SMTPAuthenticationError,
+    SMTPCommandFailedError,
     SMTPException,
     SMTPLoginError,
     SMTPNoRecipientError,
-    SMTPCommandFailedError,
-    SMTPAuthenticationError,
 )
+from .smtp import SMTP, SMTP_SSL
 
 __all__ = (
     "SMTP",
