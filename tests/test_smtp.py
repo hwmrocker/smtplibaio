@@ -4,7 +4,6 @@ from email.headerregistry import Address
 from email.message import EmailMessage
 
 import pytest
-
 from context import SMTP
 
 test_message = """\
