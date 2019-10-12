@@ -17,3 +17,4 @@ repos:
     hooks:
     -   id: isort
         args: ["--multi-line=3", "--trailing-comma"]
+        files: ".py"
